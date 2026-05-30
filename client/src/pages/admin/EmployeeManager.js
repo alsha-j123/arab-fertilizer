@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
 import apiClient from '../../utils/apiClient';
 import { useAuth } from '../../context/AuthContext';
 
 
-const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+ 
 const EMPTY_EMP = { name:'', role:'', phone:'', email:'', address:'', area:'', region:'', baseSalary:'', status:'active', notes:'' };
 
 const Toast = ({ msg, type='success' }) => msg ? (
