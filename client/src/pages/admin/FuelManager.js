@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import apiClient from '../../utils/apiClient';
 import { useAuth } from '../../context/AuthContext';
 
@@ -20,21 +20,26 @@ const FuelManager = () => {
 
   const { user } = useAuth();
 
-  const fetchData = () => {
-    setLoading(true);
-    const params = {};
-    if (filterEmp) params.employee = filterEmp;
-    if (filterMonth) params.month = filterMonth;
-    
-    const endpoints = [apiClient.get('/fuel', { params })];
-    if (user?.role === 'admin') endpoints.push(apiClient.get('/employees'));
+const fetchData = useCallback(() => {
+  setLoading(true);
+  const params = {};
+  if (filterEmp) params.employee = filterEmp;
+  if (filterMonth) params.month = filterMonth;
 
-    Promise.all(endpoints).then(([fuelRes, empRes]) => {
+  const endpoints = [apiClient.get('/fuel', { params })];
+  if (user?.role === 'admin') endpoints.push(apiClient.get('/employees'));
+
+  Promise.all(endpoints)
+    .then(([fuelRes, empRes]) => {
       setRecords(fuelRes.data.records || []);
       if (empRes) setEmployees(empRes.data.employees || []);
-    }).catch(() => {}).finally(() => setLoading(false));
-  };
-  useEffect(() => { fetchData(); }, [filterEmp, filterMonth]);
+    })
+    .catch(() => {})
+    .finally(() => setLoading(false));
+}, [filterEmp, filterMonth, user]);
+useEffect(() => {
+  fetchData();
+}, [fetchData]);
 
   const flash = msg => { setToast(msg); setTimeout(() => setToast(''), 2500); };
 
