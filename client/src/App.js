@@ -2,7 +2,7 @@ import React, { useEffect, Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
 
 // Context Providers
-import { AuthProvider, useAuth } from './context/AuthContext';
+import { AuthProvider } from './context/AuthContext';
 import { CartProvider } from './context/CartContext';
 import { WishlistProvider } from './context/WishlistContext';
 // Bug fix #8: ProductsProvider was defined but never imported or used — all consumers got null context
@@ -31,14 +31,10 @@ const AboutUs       = lazy(() => import('./pages/AboutUs'));
 const Profile       = lazy(() => import('./pages/Profile'));
 const ContactUs     = lazy(() => import('./pages/ContactUs'));
 
-// Lazy-loaded category pages
-const Categories    = lazy(() => import('./pages/Categories'));
-
 // Lazy-loaded Admin Pages
 const AdminLayout     = lazy(() => import('./pages/admin/AdminLayout'));
 const Dashboard       = lazy(() => import('./pages/admin/Dashboard'));
 const ProductManager  = lazy(() => import('./pages/admin/ProductManager'));
-const AdminPages      = lazy(() => import('./pages/admin/AdminPages'));
 const EmployeeManager = lazy(() => import('./pages/admin/EmployeeManager'));
 const SalaryManager   = lazy(() => import('./pages/admin/SalaryManager'));
 const DealerManager   = lazy(() => import('./pages/admin/DealerManager'));

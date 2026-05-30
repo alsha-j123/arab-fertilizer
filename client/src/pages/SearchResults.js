@@ -10,11 +10,9 @@ const SearchResults = () => {
   const q = searchParams.get('q') || '';
 
   const [results, setResults] = useState([]);
-  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (!q.trim()) { setResults([]); return; }
-    setLoading(true);
 
     const searchLocalStorage = () => {
       try {
@@ -42,8 +40,7 @@ const SearchResults = () => {
           setResults(searchLocalStorage());
         }
       })
-      .catch(() => setResults(searchLocalStorage()))
-      .finally(() => setLoading(false));
+      .catch(() => setResults(searchLocalStorage()));
   }, [q]);
 
   return (

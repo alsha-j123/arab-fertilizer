@@ -40,6 +40,7 @@ export const OrderManager = () => {
 
   useEffect(() => {
     fetchOrders(1, filter);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter]);
 
   const flash = msg => { setToast(msg); setTimeout(() => setToast(''), 2500); };

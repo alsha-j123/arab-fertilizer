@@ -1,12 +1,12 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useState, useEffect } from 'react';
+import { motion } from 'framer-motion';
 import apiClient from '../../utils/apiClient';
 import { useAuth } from '../../context/AuthContext';
 
 
 
 const Analytics = () => {
-  const { user } = useAuth();
+  useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [dates, setDates] = useState({
