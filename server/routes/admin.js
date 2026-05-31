@@ -348,7 +348,7 @@ router.get('/users', adminOnly, async (req, res) => {
   }
 });
 
-// PUT /api/admin/users/:id/role — promote user and link to employee
+// PUT /api/admin/users/:id/role — promote/demote user and link to employee
 router.put('/users/:id/role', adminOnly, async (req, res) => {
   try {
     const { role, employeeId } = req.body;
@@ -359,21 +359,36 @@ router.put('/users/:id/role', adminOnly, async (req, res) => {
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
 
+    const previousRole = user.role;
+
+    // Set the new role
     user.role = role;
+
+    // CRITICAL: Mark that an admin explicitly set this role.
+    // This prevents the auto-link logic in auth routes from overwriting
+    // the role on every login/register/me call.
+    user.roleSetByAdmin = true;
+
     if (role === 'employee' && employeeId) {
       user.employeeId = employeeId;
       // Also update the Employee record to link back to this user
       await Employee.findByIdAndUpdate(employeeId, { userId: user._id });
     } else if (role === 'customer') {
+      // Unlink from employee record when demoting
       if (user.employeeId) {
-        await Employee.findByIdAndUpdate(user.employeeId, { $unset: { userId: "" } });
+        await Employee.findByIdAndUpdate(user.employeeId, { $unset: { userId: '' } });
+        console.log(`[RoleUpdate] Unlinked Employee record ${user.employeeId} from user ${user.email}`);
       }
       user.employeeId = undefined;
     }
-    
+
     await user.save();
+
+    console.log(`[RoleUpdate] Admin changed role of ${user.email} from '${previousRole}' → '${role}'. roleSetByAdmin=true. Persisted to DB.`);
+
     res.json({ success: true, message: `User role updated to ${role}`, user });
   } catch (err) {
+    console.error(`[RoleUpdate] Error updating role for user ${req.params.id}:`, err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });

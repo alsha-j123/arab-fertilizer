@@ -8,6 +8,9 @@ const userSchema = new mongoose.Schema({
   googleId: { type: String },
   avatar: { type: String },
   role: { type: String, enum: ['customer', 'admin', 'employee'], default: 'customer' },
+  // When an admin explicitly sets a role via User Management, this flag is set to true.
+  // It prevents the auto-link logic from overwriting the role on every login.
+  roleSetByAdmin: { type: Boolean, default: false },
   employeeId: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee' },
   orderHistory: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Order' }],
   wishlist: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Product' }],

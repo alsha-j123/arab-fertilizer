@@ -40,6 +40,18 @@ export const AuthProvider = ({ children }) => {
     }
   }, []);
 
+  // Explicitly re-fetch the latest user data from the DB.
+  // Call this after any admin role change to immediately reflect the update.
+  const refreshUser = useCallback(async () => {
+    try {
+      const { data } = await API.get('/auth/me');
+      setUser(data.user);
+      return data.user;
+    } catch {
+      return null;
+    }
+  }, []);
+
   useEffect(() => { loadUser(); }, [loadUser]);
 
   // Auto-show auth modal after 4 seconds if not logged in
@@ -105,7 +117,9 @@ export const AuthProvider = ({ children }) => {
       user, loading, showAuthModal, setShowAuthModal,
       login, register, googleLogin, logout,
       forgotPassword, resetPassword,
+      refreshUser,
       isAdmin: user?.role === 'admin',
+      // isEmployee is always derived from the live DB-fetched user.role — never from stale cache
       isEmployee: user?.role === 'employee',
       canAccessAdmin: user?.role === 'admin' || user?.role === 'employee',
       isLoggedIn: !!user

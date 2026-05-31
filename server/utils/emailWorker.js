@@ -5,9 +5,8 @@ const processJobs = async () => {
   try {
     const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);
 
-    // Pick up:
-    // 1. pending/failed jobs that are ready to retry
-    // 2. jobs stuck in 'processing' for >2 min (Render spin-down recovery)
+    // Pick up pending/failed jobs OR jobs stuck in 'processing' for > 2 minutes
+    // (handles Render spin-down mid-job scenario)
     const job = await EmailJob.findOneAndUpdate(
       {
         $or: [
@@ -47,24 +46,18 @@ const processJobs = async () => {
 
       job.status = 'completed';
       await job.save();
-      console.log(`✅ Email job ${job._id} (${job.type}) sent successfully`);
-
     } catch (error) {
-      console.error(`❌ Email Job ${job._id} failed:`, error.message);
+      console.error(`Email Job ${job._id} failed:`, error.message);
       job.lastError = error.message;
 
       if (job.attempts >= job.maxAttempts) {
         job.status = 'failed';
-        console.error(`🛑 Job ${job._id} permanently failed after ${job.attempts} attempts`);
       } else {
         job.status = 'pending';
-        // Exponential backoff: 1min, 5min, 15min
         const backoffMinutes = [1, 5, 15];
         const delay = backoffMinutes[job.attempts - 1] || 15;
         job.nextAttemptAt = new Date(Date.now() + delay * 60 * 1000);
-        console.log(`🔄 Job ${job._id} will retry in ${delay} minute(s)`);
       }
-
       await job.save();
     }
   } catch (error) {
@@ -73,13 +66,10 @@ const processJobs = async () => {
 };
 
 const startEmailWorker = () => {
-  console.log('📧 Starting Email Queue Worker...');
-
-  // Run immediately on startup to flush any jobs left over from a previous spin-down
-  setTimeout(processJobs, 2000);
-
-  // Then poll every 10 seconds
+  console.log('Starting Email Queue Worker...');
   setInterval(processJobs, 10000);
+  // Also run immediately on startup to clear any jobs left from previous spin-down
+  setTimeout(processJobs, 2000);
 };
 
 module.exports = { startEmailWorker };

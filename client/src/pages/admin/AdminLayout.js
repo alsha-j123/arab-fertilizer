@@ -12,8 +12,7 @@ const AdminLayout = () => {
     if (!loading && !canAccessAdmin) {
       if (!user) {
         setShowAuthModal(true);
-        navigate('/');
-      } else {
+        navigate('/');\n      } else {
         navigate('/');
       }
     }
@@ -23,6 +22,16 @@ const AdminLayout = () => {
       const restrictedPaths = ['/admin/products', '/admin/stock', '/admin/vendors', '/admin/employees', '/admin/users', '/admin/coupons', '/admin/reviews', '/admin/analytics'];
       const currentPath = window.location.pathname;
       if (restrictedPaths.some(path => currentPath.startsWith(path))) {
+        navigate('/admin');
+      }
+    }
+
+    // Block non-employees (e.g. customers who somehow have a link) from the Employee Panel
+    if (!loading && user && user.role !== 'employee' && user.role !== 'admin') {
+      const employeeOnlyPaths = ['/admin/employee-panel', '/admin/my-sales', '/admin/my-targets'];
+      const currentPath = window.location.pathname;
+      if (employeeOnlyPaths.some(path => currentPath.startsWith(path))) {
+        console.warn(`[AccessGuard] User ${user.email} (role: ${user.role}) attempted to access employee-only route. Redirecting.`);
         navigate('/admin');
       }
     }

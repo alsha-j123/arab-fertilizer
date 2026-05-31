@@ -54,14 +54,29 @@ router.post('/register', async (req, res) => {
 
     const user = await User.create({ name, email, password });
 
-    // Auto-link to Employee if email matches
+    // Auto-link to Employee if email matches — but ONLY if the admin has not
+    // explicitly set this user's role via User Management (roleSetByAdmin flag).
+    // This prevents login from overwriting a deliberate demotion to 'customer'.
     const employee = await Employee.findOne({ email: user.email.toLowerCase().trim() });
     if (employee) {
-      user.employeeId = employee._id;
-      if (user.role !== 'employee' && user.role !== 'admin') {
-        user.role = 'employee';
+      let changed = false;
+
+      // Only auto-link the employeeId reference (non-destructive)
+      if (user.employeeId?.toString() !== employee._id.toString()) {
+        user.employeeId = employee._id;
+        changed = true;
       }
-      await user.save();
+
+      // Only auto-promote role if the admin has NOT locked it
+      if (!user.roleSetByAdmin && user.role !== 'employee' && user.role !== 'admin') {
+        console.log(`[AutoLink] Promoting ${user.email} to employee (roleSetByAdmin=false)`);
+        user.role = 'employee';
+        changed = true;
+      } else if (user.roleSetByAdmin) {
+        console.log(`[AutoLink] Skipping role change for ${user.email} — role locked by admin to '${user.role}'`);
+      }
+
+      if (changed) await user.save();
 
       if (employee.userId?.toString() !== user._id.toString()) {
         employee.userId = user._id;
@@ -92,14 +107,29 @@ router.post('/login', async (req, res) => {
     if (!user || !(await user.comparePassword(password)))
       return res.status(401).json({ success: false, message: 'Invalid credentials' });
 
-    // Auto-link to Employee if email matches
+    // Auto-link to Employee if email matches — but ONLY if the admin has not
+    // explicitly set this user's role via User Management (roleSetByAdmin flag).
+    // This prevents login from overwriting a deliberate demotion to 'customer'.
     const employee = await Employee.findOne({ email: user.email.toLowerCase().trim() });
     if (employee) {
-      user.employeeId = employee._id;
-      if (user.role !== 'employee' && user.role !== 'admin') {
-        user.role = 'employee';
+      let changed = false;
+
+      // Only auto-link the employeeId reference (non-destructive)
+      if (user.employeeId?.toString() !== employee._id.toString()) {
+        user.employeeId = employee._id;
+        changed = true;
       }
-      await user.save();
+
+      // Only auto-promote role if the admin has NOT locked it
+      if (!user.roleSetByAdmin && user.role !== 'employee' && user.role !== 'admin') {
+        console.log(`[AutoLink] Promoting ${user.email} to employee (roleSetByAdmin=false)`);
+        user.role = 'employee';
+        changed = true;
+      } else if (user.roleSetByAdmin) {
+        console.log(`[AutoLink] Skipping role change for ${user.email} — role locked by admin to '${user.role}'`);
+      }
+
+      if (changed) await user.save();
 
       if (employee.userId?.toString() !== user._id.toString()) {
         employee.userId = user._id;
@@ -155,14 +185,29 @@ router.post('/google', async (req, res) => {
       user = await User.create({ googleId, email, name, avatar });
     }
 
-    // Auto-link to Employee if email matches
+    // Auto-link to Employee if email matches — but ONLY if the admin has not
+    // explicitly set this user's role via User Management (roleSetByAdmin flag).
+    // This prevents login from overwriting a deliberate demotion to 'customer'.
     const employee = await Employee.findOne({ email: user.email.toLowerCase().trim() });
     if (employee) {
-      user.employeeId = employee._id;
-      if (user.role !== 'employee' && user.role !== 'admin') {
-        user.role = 'employee';
+      let changed = false;
+
+      // Only auto-link the employeeId reference (non-destructive)
+      if (user.employeeId?.toString() !== employee._id.toString()) {
+        user.employeeId = employee._id;
+        changed = true;
       }
-      await user.save();
+
+      // Only auto-promote role if the admin has NOT locked it
+      if (!user.roleSetByAdmin && user.role !== 'employee' && user.role !== 'admin') {
+        console.log(`[AutoLink] Promoting ${user.email} to employee (roleSetByAdmin=false)`);
+        user.role = 'employee';
+        changed = true;
+      } else if (user.roleSetByAdmin) {
+        console.log(`[AutoLink] Skipping role change for ${user.email} — role locked by admin to '${user.role}'`);
+      }
+
+      if (changed) await user.save();
 
       if (employee.userId?.toString() !== user._id.toString()) {
         employee.userId = user._id;
@@ -201,21 +246,27 @@ router.get('/me', protect, async (req, res) => {
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
 
-    // Auto-link to Employee if email matches
+    // Auto-link to Employee if email matches — but ONLY if the admin has not
+    // explicitly locked this user's role (roleSetByAdmin flag).
     const employee = await Employee.findOne({ email: user.email.toLowerCase().trim() });
     if (employee) {
       let changed = false;
+
       if (user.employeeId?.toString() !== employee._id.toString()) {
         user.employeeId = employee._id;
         changed = true;
       }
-      if (user.role !== 'employee' && user.role !== 'admin') {
+
+      // Respect admin-set role — do NOT auto-promote if admin locked the role
+      if (!user.roleSetByAdmin && user.role !== 'employee' && user.role !== 'admin') {
+        console.log(`[/me AutoLink] Promoting ${user.email} to employee (roleSetByAdmin=false)`);
         user.role = 'employee';
         changed = true;
+      } else if (user.roleSetByAdmin) {
+        console.log(`[/me AutoLink] Skipping role change for ${user.email} — role locked by admin to '${user.role}'`);
       }
-      if (changed) {
-        await user.save();
-      }
+
+      if (changed) await user.save();
 
       if (employee.userId?.toString() !== user._id.toString()) {
         employee.userId = user._id;

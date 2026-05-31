@@ -233,10 +233,10 @@ const Checkout = () => {
                     <div style={{ marginBottom: 16 }}>
                       <h4 style={{ fontSize: '0.9rem', marginBottom: 8, color: '#1a1a1a' }}>Our Bank Details:</h4>
                       <div style={{ fontSize: '0.82rem', color: '#666', lineHeight: 1.6, background: 'white', padding: 12, borderRadius: 8, border: '1px dashed #2D5A27' }}>
-                        <strong>Bank:</strong> Meezan Bank<br />
-                        <strong>Account Name:</strong> Arab Fertilizer<br />
-                        <strong>Account #:</strong> 1234-5678-9012-34<br />
-                        <strong>IBAN:</strong> PK00 MEZN 0000 1234 5678 9012
+                        <strong>Bank:</strong> Allied Bank<br />
+                        <strong>Account Name:</strong> Arab Fertilizer and Agro Chemicals<br />
+                        <strong>Account #:</strong> 10053335850010<br />
+                        <strong>IBAN:</strong> PK87ABPA0010053335850010
                       </div>
                     </div>
                     
