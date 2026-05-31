@@ -12,7 +12,8 @@ const AdminLayout = () => {
     if (!loading && !canAccessAdmin) {
       if (!user) {
         setShowAuthModal(true);
-        navigate('/');\n      } else {
+        navigate('/');
+      } else {
         navigate('/');
       }
     }
