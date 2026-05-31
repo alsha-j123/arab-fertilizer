@@ -3,12 +3,24 @@ const { sendOrderConfirmation, sendAdminOrderNotification, sendPasswordResetOTP,
 
 const processJobs = async () => {
   try {
-    // Find a pending or failed job that is ready to be attempted
+    const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);
+
+    // Pick up:
+    // 1. pending/failed jobs that are ready to retry
+    // 2. jobs stuck in 'processing' for >2 min (Render spin-down recovery)
     const job = await EmailJob.findOneAndUpdate(
       {
-        status: { $in: ['pending', 'failed'] },
-        nextAttemptAt: { $lte: new Date() },
-        $expr: { $lt: ['$attempts', '$maxAttempts'] }
+        $or: [
+          {
+            status: { $in: ['pending', 'failed'] },
+            nextAttemptAt: { $lte: new Date() },
+            $expr: { $lt: ['$attempts', '$maxAttempts'] }
+          },
+          {
+            status: 'processing',
+            updatedAt: { $lte: twoMinutesAgo }
+          }
+        ]
       },
       {
         status: 'processing',
@@ -17,10 +29,7 @@ const processJobs = async () => {
       { new: true, sort: { createdAt: 1 } }
     );
 
-    if (!job) {
-      // No jobs to process
-      return;
-    }
+    if (!job) return;
 
     try {
       if (job.type === 'customer_order_confirmation') {
@@ -36,24 +45,26 @@ const processJobs = async () => {
         await sendContactEmail(job.data);
       }
 
-      // Mark as completed
       job.status = 'completed';
       await job.save();
+      console.log(`✅ Email job ${job._id} (${job.type}) sent successfully`);
+
     } catch (error) {
-      console.error(`Email Job ${job._id} failed:`, error.message);
-      
+      console.error(`❌ Email Job ${job._id} failed:`, error.message);
       job.lastError = error.message;
-      
+
       if (job.attempts >= job.maxAttempts) {
         job.status = 'failed';
+        console.error(`🛑 Job ${job._id} permanently failed after ${job.attempts} attempts`);
       } else {
         job.status = 'pending';
-        // Exponential backoff for retries: 1min, 5min, 15min
+        // Exponential backoff: 1min, 5min, 15min
         const backoffMinutes = [1, 5, 15];
         const delay = backoffMinutes[job.attempts - 1] || 15;
         job.nextAttemptAt = new Date(Date.now() + delay * 60 * 1000);
+        console.log(`🔄 Job ${job._id} will retry in ${delay} minute(s)`);
       }
-      
+
       await job.save();
     }
   } catch (error) {
@@ -61,10 +72,13 @@ const processJobs = async () => {
   }
 };
 
-// Start polling
 const startEmailWorker = () => {
-  console.log('Starting Email Queue Worker...');
-  // Poll every 10 seconds
+  console.log('📧 Starting Email Queue Worker...');
+
+  // Run immediately on startup to flush any jobs left over from a previous spin-down
+  setTimeout(processJobs, 2000);
+
+  // Then poll every 10 seconds
   setInterval(processJobs, 10000);
 };
 
