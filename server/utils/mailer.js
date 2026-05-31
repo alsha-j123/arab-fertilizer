@@ -1,39 +1,105 @@
 const nodemailer = require('nodemailer');
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SMTP transporter factory
+// FIX: Gmail SMTP requires the "from" address to match the authenticated
+//      EMAIL_USER.  Using a custom domain (e.g. noreply@arabfertilizer.com)
+//      as the from address causes Gmail to reject the message with a 530/535
+//      error.  We now always derive the display "from" from EMAIL_USER so the
+//      SMTP AUTH and the envelope sender are the same account.
+// ─────────────────────────────────────────────────────────────────────────────
 const createTransporter = () => {
   const user = process.env.EMAIL_USER;
   const pass = process.env.EMAIL_PASS ? process.env.EMAIL_PASS.replace(/\s/g, '') : '';
-  
+
+  if (!user || !pass) {
+    throw new Error(
+      'Email configuration missing: EMAIL_USER and EMAIL_PASS must be set in .env'
+    );
+  }
+
   return nodemailer.createTransport({
     host: 'smtp.gmail.com',
     port: 465,
-    secure: true, // Use SSL
-    auth: {
-      user: user,
-      pass: pass
-    }
+    secure: true, // SSL
+    auth: { user, pass },
+    // Increase timeout for slow SMTP handshakes (common on shared hosting)
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 15000,
   });
+};
+
+// FIX: "from" must always be the Gmail account used for AUTH.
+// EMAIL_FROM can provide a display name: "Arab Fertilizer <you@gmail.com>"
+// but the address portion MUST equal EMAIL_USER.
+const getSenderAddress = () => {
+  const user = process.env.EMAIL_USER;
+  const fromEnv = process.env.EMAIL_FROM || '';
+
+  // If EMAIL_FROM is set and contains the EMAIL_USER address, use it as-is.
+  if (fromEnv && user && fromEnv.includes(user)) {
+    return fromEnv;
+  }
+
+  // Otherwise build a safe sender using just EMAIL_USER (always valid for Gmail)
+  return user ? `Arab Fertilizer <${user}>` : 'Arab Fertilizer';
 };
 
 const formatCurrency = (amount) =>
   `PKR ${Number(amount).toLocaleString('en-PK')}`;
 
-const sendOrderConfirmation = async (email, userName, order) => {
-  const transporter = createTransporter();
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: safely convert an _id (ObjectId, string, or plain object) to string.
+// FIX: When an order is stored as Mixed in EmailJob.data and re-read from
+//      MongoDB, _id may arrive as a plain string or a plain { $oid: '...' }
+//      object instead of a real ObjectId instance.
+// ─────────────────────────────────────────────────────────────────────────────
+const idToString = (id) => {
+  if (!id) return 'UNKNOWN';
+  if (typeof id === 'string') return id;
+  if (typeof id.toString === 'function') return id.toString();
+  if (id.$oid) return id.$oid; // BSON extended JSON
+  return String(id);
+};
 
-  const itemsHtml = order.items
-    .map(item => `
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: safely extract shipping address fields from a deserialized order.
+// ─────────────────────────────────────────────────────────────────────────────
+const safeAddress = (order) => {
+  const addr = order.shippingAddress || {};
+  return {
+    name: addr.name || 'Customer',
+    street: addr.street || addr.address || '',
+    city: addr.city || '',
+    phone: addr.phone || '',
+  };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: build items + pricing HTML rows (shared between customer & admin)
+// ─────────────────────────────────────────────────────────────────────────────
+const buildOrderTableHtml = (order) => {
+  const items = Array.isArray(order.items) ? order.items : [];
+
+  const itemsHtml = items
+    .map(
+      (item) => `
       <tr style="border-bottom:1px solid #eee">
-        <td style="padding:12px;color:#333">${item.name}</td>
-        <td style="padding:12px;text-align:center;color:#666">${item.quantity}</td>
-        <td style="padding:12px;text-align:right;color:#2D5A27;font-weight:600">${formatCurrency(item.price * item.quantity)}</td>
+        <td style="padding:12px;color:#333">${item.name || 'Item'}</td>
+        <td style="padding:12px;text-align:center;color:#666">${item.quantity || 0}</td>
+        <td style="padding:12px;text-align:right;color:#2D5A27;font-weight:600">${formatCurrency((item.price || 0) * (item.quantity || 0))}</td>
       </tr>
-    `)
+    `
+    )
     .join('');
 
-  const subtotalVal = order.subtotal !== undefined ? order.subtotal : order.totalAmount;
-  const shippingVal = order.shippingCost !== undefined ? order.shippingCost : 0;
-  const discountVal = order.discountAmount !== undefined ? order.discountAmount : 0;
+  const subtotalVal =
+    order.subtotal !== undefined ? order.subtotal : order.totalAmount || 0;
+  const shippingVal =
+    order.shippingCost !== undefined ? order.shippingCost : 0;
+  const discountVal =
+    order.discountAmount !== undefined ? order.discountAmount : 0;
 
   let pricingRows = `
     <tr style="border-top:1px solid #eee">
@@ -58,9 +124,21 @@ const sendOrderConfirmation = async (email, userName, order) => {
   pricingRows += `
     <tr style="background:#f0f8ee;border-top:2px solid #2D5A27">
       <td colspan="2" style="padding:12px;font-weight:700;color:#333">Total Amount</td>
-      <td style="padding:12px;text-align:right;font-weight:700;font-size:18px;color:#2D5A27">${formatCurrency(order.totalAmount)}</td>
+      <td style="padding:12px;text-align:right;font-weight:700;font-size:18px;color:#2D5A27">${formatCurrency(order.totalAmount || 0)}</td>
     </tr>
   `;
+
+  return { itemsHtml, pricingRows };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// sendOrderConfirmation — sends branded HTML email to the customer
+// ─────────────────────────────────────────────────────────────────────────────
+const sendOrderConfirmation = async (email, userName, order) => {
+  const transporter = createTransporter();
+  const { itemsHtml, pricingRows } = buildOrderTableHtml(order);
+  const addr = safeAddress(order);
+  const orderId = idToString(order._id).substring(0, 12).toUpperCase();
 
   const html = `
     <!DOCTYPE html>
@@ -81,7 +159,7 @@ const sendOrderConfirmation = async (email, userName, order) => {
           
           <div style="background:#f9f9f9;border-radius:8px;padding:16px 20px;margin-bottom:25px;border-left:4px solid #2D5A27">
             <p style="margin:0;font-size:13px;color:#888">Order ID</p>
-            <p style="margin:4px 0 0;font-size:18px;font-weight:700;color:#333;letter-spacing:1px">#${order._id.toString().substring(0, 12).toUpperCase()}</p>
+            <p style="margin:4px 0 0;font-size:18px;font-weight:700;color:#333;letter-spacing:1px">#${orderId}</p>
           </div>
           
           <!-- Items -->
@@ -111,15 +189,15 @@ const sendOrderConfirmation = async (email, userName, order) => {
           
           <div style="background:#f9f9f9;border-radius:8px;padding:15px;margin-bottom:25px">
             <p style="margin:0;font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px">Delivery Address</p>
-            <p style="margin:5px 0 0;font-weight:600;color:#333">${order.shippingAddress.name}</p>
-            <p style="margin:2px 0 0;color:#666">${order.shippingAddress.street}, ${order.shippingAddress.city}</p>
-            <p style="margin:2px 0 0;color:#666">📞 ${order.shippingAddress.phone}</p>
+            <p style="margin:5px 0 0;font-weight:600;color:#333">${addr.name}</p>
+            <p style="margin:2px 0 0;color:#666">${addr.street}${addr.city ? ', ' + addr.city : ''}</p>
+            ${addr.phone ? `<p style="margin:2px 0 0;color:#666">📞 ${addr.phone}</p>` : ''}
           </div>
         </div>
         
         <!-- Footer -->
         <div style="background:#2D5A27;padding:25px 30px;text-align:center">
-          <p style="color:rgba(255,255,255,0.8);margin:0;font-size:13px">Need help? Contact us at <a href="mailto:support@arabfertilizer.com" style="color:#C8A951">support@arabfertilizer.com</a></p>
+          <p style="color:rgba(255,255,255,0.8);margin:0;font-size:13px">Need help? Contact us at <a href="mailto:${process.env.EMAIL_USER}" style="color:#C8A951">${process.env.EMAIL_USER}</a></p>
           <p style="color:rgba(255,255,255,0.5);margin:8px 0 0;font-size:12px">© ${new Date().getFullYear()} Arab Fertilizers & Agro Chemicals</p>
         </div>
       </div>
@@ -127,60 +205,31 @@ const sendOrderConfirmation = async (email, userName, order) => {
     </html>
   `;
 
-  await transporter.sendMail({
-    from: process.env.EMAIL_FROM || 'Arab Fertilizer <noreply@arabfertilizer.com>',
+  const info = await transporter.sendMail({
+    from: getSenderAddress(),
     to: email,
-    subject: `✅ Your Arab Fertilizer Order is Confirmed! — #${order._id.toString().substring(0, 12).toUpperCase()}`,
-    html
+    subject: `✅ Your Arab Fertilizer Order is Confirmed! — #${orderId}`,
+    html,
   });
+
+  console.log(`[mailer] Order confirmation sent to ${email} (messageId: ${info.messageId})`);
+  return info;
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// sendAdminOrderNotification — sends order alert to admin
+// ─────────────────────────────────────────────────────────────────────────────
 const sendAdminOrderNotification = async (order, userName) => {
   const adminEmail = process.env.ADMIN_EMAIL;
-  if (!adminEmail) return;
-
-  const transporter = createTransporter();
-
-  const itemsHtml = order.items
-    .map(item => `
-      <tr style="border-bottom:1px solid #eee">
-        <td style="padding:12px;color:#333">${item.name}</td>
-        <td style="padding:12px;text-align:center;color:#666">${item.quantity}</td>
-        <td style="padding:12px;text-align:right;color:#2D5A27;font-weight:600">${formatCurrency(item.price * item.quantity)}</td>
-      </tr>
-    `)
-    .join('');
-
-  const subtotalVal = order.subtotal !== undefined ? order.subtotal : order.totalAmount;
-  const shippingVal = order.shippingCost !== undefined ? order.shippingCost : 0;
-  const discountVal = order.discountAmount !== undefined ? order.discountAmount : 0;
-
-  let pricingRows = `
-    <tr style="border-top:1px solid #eee">
-      <td colspan="2" style="padding:10px 12px;text-align:left;color:#555;font-size:14px">Subtotal</td>
-      <td style="padding:10px 12px;text-align:right;color:#333;font-size:14px;font-weight:600">${formatCurrency(subtotalVal)}</td>
-    </tr>
-    <tr>
-      <td colspan="2" style="padding:10px 12px;text-align:left;color:#555;font-size:14px">Shipping</td>
-      <td style="padding:10px 12px;text-align:right;color:#333;font-size:14px;font-weight:600">${shippingVal === 0 ? 'FREE' : formatCurrency(shippingVal)}</td>
-    </tr>
-  `;
-
-  if (discountVal > 0) {
-    pricingRows += `
-      <tr>
-        <td colspan="2" style="padding:10px 12px;text-align:left;color:#e74c3c;font-size:14px">Discount ${order.couponCode ? `(${order.couponCode})` : ''}</td>
-        <td style="padding:10px 12px;text-align:right;color:#e74c3c;font-size:14px;font-weight:600">-${formatCurrency(discountVal)}</td>
-      </tr>
-    `;
+  if (!adminEmail) {
+    console.warn('[mailer] ADMIN_EMAIL not set — skipping admin order notification');
+    return;
   }
 
-  pricingRows += `
-    <tr style="background:#f0f8ee;border-top:2px solid #2D5A27">
-      <td colspan="2" style="padding:12px;font-weight:700;color:#333">Total Amount</td>
-      <td style="padding:12px;text-align:right;font-weight:700;font-size:18px;color:#2D5A27">${formatCurrency(order.totalAmount)}</td>
-    </tr>
-  `;
+  const transporter = createTransporter();
+  const { itemsHtml, pricingRows } = buildOrderTableHtml(order);
+  const addr = safeAddress(order);
+  const orderId = idToString(order._id).substring(0, 12).toUpperCase();
 
   const html = `
     <!DOCTYPE html>
@@ -201,7 +250,7 @@ const sendAdminOrderNotification = async (order, userName) => {
           
           <div style="background:#f9f9f9;border-radius:8px;padding:16px 20px;margin-bottom:25px;border-left:4px solid #C8A951">
             <p style="margin:0;font-size:13px;color:#888">Order ID</p>
-            <p style="margin:4px 0 0;font-size:18px;font-weight:700;color:#333;letter-spacing:1px">#${order._id.toString().substring(0, 12).toUpperCase()}</p>
+            <p style="margin:4px 0 0;font-size:18px;font-weight:700;color:#333;letter-spacing:1px">#${orderId}</p>
           </div>
           
           <!-- Items -->
@@ -231,9 +280,9 @@ const sendAdminOrderNotification = async (order, userName) => {
           
           <div style="background:#f9f9f9;border-radius:8px;padding:15px;margin-bottom:25px">
             <p style="margin:0;font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px">Delivery Address</p>
-            <p style="margin:5px 0 0;font-weight:600;color:#333">${order.shippingAddress.name}</p>
-            <p style="margin:2px 0 0;color:#666">${order.shippingAddress.street}, ${order.shippingAddress.city}</p>
-            <p style="margin:2px 0 0;color:#666">📞 ${order.shippingAddress.phone}</p>
+            <p style="margin:5px 0 0;font-weight:600;color:#333">${addr.name}</p>
+            <p style="margin:2px 0 0;color:#666">${addr.street}${addr.city ? ', ' + addr.city : ''}</p>
+            ${addr.phone ? `<p style="margin:2px 0 0;color:#666">📞 ${addr.phone}</p>` : ''}
           </div>
         </div>
         
@@ -246,14 +295,20 @@ const sendAdminOrderNotification = async (order, userName) => {
     </html>
   `;
 
-  await transporter.sendMail({
-    from: process.env.EMAIL_FROM || 'Arab Fertilizer <noreply@arabfertilizer.com>',
+  const info = await transporter.sendMail({
+    from: getSenderAddress(),
     to: adminEmail,
-    subject: `🚨 New Order Alert! — #${order._id.toString().substring(0, 12).toUpperCase()} by ${userName}`,
-    html
+    subject: `🚨 New Order Alert! — #${orderId} by ${userName}`,
+    html,
   });
+
+  console.log(`[mailer] Admin order notification sent to ${adminEmail} (messageId: ${info.messageId})`);
+  return info;
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// sendPasswordResetOTP
+// ─────────────────────────────────────────────────────────────────────────────
 const sendPasswordResetOTP = async (email, userName, otp) => {
   const transporter = createTransporter();
 
@@ -290,17 +345,26 @@ const sendPasswordResetOTP = async (email, userName, otp) => {
     </html>
   `;
 
-  await transporter.sendMail({
-    from: process.env.EMAIL_FROM || 'Arab Fertilizer <noreply@arabfertilizer.com>',
+  const info = await transporter.sendMail({
+    from: getSenderAddress(),
     to: email,
     subject: `🔐 Your Password Reset Code: ${otp}`,
-    html
+    html,
   });
+
+  console.log(`[mailer] Password reset OTP sent to ${email} (messageId: ${info.messageId})`);
+  return info;
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// sendContactEmail — forwards contact form to admin
+// ─────────────────────────────────────────────────────────────────────────────
 const sendContactEmail = async (formData) => {
   const adminEmail = process.env.ADMIN_EMAIL;
-  if (!adminEmail) return;
+  if (!adminEmail) {
+    console.warn('[mailer] ADMIN_EMAIL not set — skipping contact form email');
+    return;
+  }
 
   const transporter = createTransporter();
 
@@ -321,18 +385,22 @@ const sendContactEmail = async (formData) => {
     </html>
   `;
 
-  await transporter.sendMail({
-    from: process.env.EMAIL_FROM || 'Arab Fertilizer <noreply@arabfertilizer.com>',
+  const info = await transporter.sendMail({
+    from: getSenderAddress(),
     to: adminEmail,
+    // FIX: replyTo uses the visitor's email so admin can reply directly to them.
     replyTo: formData.email,
     subject: `📩 Contact Form: ${formData.subject}`,
-    html
+    html,
   });
+
+  console.log(`[mailer] Contact form email sent to ${adminEmail} (messageId: ${info.messageId})`);
+  return info;
 };
 
-module.exports = { 
-  sendOrderConfirmation, 
-  sendAdminOrderNotification, 
+module.exports = {
+  sendOrderConfirmation,
+  sendAdminOrderNotification,
   sendPasswordResetOTP,
-  sendContactEmail 
+  sendContactEmail,
 };
