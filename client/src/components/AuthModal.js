@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
@@ -110,7 +110,10 @@ const AuthModal = () => {
     finally { setLoading(false); }
   };
 
-  const handleGoogleCallback = async (response) => {
+  // Use a ref so the GSI callback always calls the latest version (fixes stale closure)
+  const googleCallbackRef = useRef(null);
+
+  const handleGoogleCallback = useCallback(async (response) => {
     setLoading(true);
     setError('');
     try {
@@ -122,17 +125,21 @@ const AuthModal = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [googleLogin]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    googleCallbackRef.current = handleGoogleCallback;
+  }, [handleGoogleCallback]);
 
   useEffect(() => {
     if (showAuthModal && tab === 'login') {
-      /* Initialize Google One Tap / Sign In button */
+      const stableCallback = (response) => googleCallbackRef.current(response);
       const interval = setInterval(() => {
         if (window.google) {
           clearInterval(interval);
           window.google.accounts.id.initialize({
-            client_id: process.env.REACT_APP_GOOGLE_CLIENT_ID || 'your_google_client_id',
-            callback: handleGoogleCallback,
+            client_id: process.env.REACT_APP_GOOGLE_CLIENT_ID,
+            callback: stableCallback,
           });
           window.google.accounts.id.renderButton(
             document.getElementById('google-signin-btn'),
@@ -142,7 +149,6 @@ const AuthModal = () => {
       }, 100);
       return () => clearInterval(interval);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showAuthModal, tab]);
 
   const handleForgot = async e => {
