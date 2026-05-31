@@ -14,7 +14,25 @@ const { startEmailWorker } = require('./utils/emailWorker');
 /* ── Performance: gzip compression for all responses ── */
 app.use(compression({ level: 6, threshold: 1024 }));
 
-app.use(cors({ origin: process.env.CLIENT_URL || 'http://localhost:3000', credentials: true }));
+const allowedOrigins = [
+  process.env.CLIENT_URL || 'http://localhost:3000',
+  'https://arab-fertilizer.vercel.app',
+];
+app.use(cors({
+  origin: (origin, cb) => {
+    // allow requests with no origin (mobile apps, curl, Postman)
+    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+    cb(new Error('Not allowed by CORS'));
+  },
+  credentials: true,
+}));
+
+/* ── Fix Cross-Origin-Opener-Policy for Google Identity Services popup ── */
+app.use((req, res, next) => {
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+  res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
+  next();
+});
 app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads'), { maxAge: '7d' }));
@@ -33,7 +51,7 @@ app.use(session({
   cookie: {
     httpOnly: true,                    // not accessible via JS
     secure: process.env.NODE_ENV === 'production', // HTTPS only in prod
-    sameSite: 'lax',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
     maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days in ms
   },
   name: 'af.sid',                      // custom name (hides default 'connect.sid')
