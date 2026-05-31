@@ -118,7 +118,7 @@ const AuthModal = () => {
       handleAuthSuccess(user);
     } catch (err) {
       console.error('Google Login Error:', err);
-      setError('Google authentication failed. Please try again.');
+      setError(err.response?.data?.message || 'Google authentication failed. Please try again.');
     } finally {
       setLoading(false);
     }
