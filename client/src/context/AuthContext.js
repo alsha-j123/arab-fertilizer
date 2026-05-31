@@ -10,7 +10,11 @@ export const useAuth = () => {
 };
 
 // withCredentials: true ensures the HTTP-only session cookie is sent/received
-const API = axios.create({ baseURL: '/api', withCredentials: true });
+// Use REACT_APP_API_URL for cross-origin deployments (e.g. Vercel + Render)
+const API = axios.create({
+  baseURL: `${process.env.REACT_APP_API_URL || ''}/api`,
+  withCredentials: true,
+});
 
 API.interceptors.request.use(config => {
   // Keep Bearer header as fallback for any context that still has the token
