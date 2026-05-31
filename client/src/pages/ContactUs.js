@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import axios from 'axios';
+import apiClient from '../utils/apiClient';
 
 const ContactUs = () => {
   const [form, setForm] = useState({ name: '', email: '', phone: '', subject: '', message: '' });
@@ -14,7 +14,7 @@ const ContactUs = () => {
     setError(null);
 
     try {
-      await axios.post('/api/notifications/contact', form);
+      await apiClient.post('/notifications/contact', form);
       setSent(true);
       setForm({ name: '', email: '', phone: '', subject: '', message: '' });
     } catch (err) {

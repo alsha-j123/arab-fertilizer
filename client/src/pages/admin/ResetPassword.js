@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import axios from 'axios';
+import apiClient from '../../utils/apiClient';
 import { useAuth } from '../../context/AuthContext';
 
 const ResetPassword = () => {
@@ -25,8 +25,8 @@ const ResetPassword = () => {
     setLoading(true);
     setMsg({ text: '', ok: true });
     try {
-      const { data } = await axios.post(
-        '/api/admin/change-password',
+      const { data } = await apiClient.post(
+        '/admin/change-password',
         {
           currentPassword: form.oldPassword,
           newPassword: form.newPassword

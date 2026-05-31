@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useCart } from '../context/CartContext';
-import axios from 'axios';
+import apiClient from '../utils/apiClient';
 import ProductCard from '../components/ProductCard';
 
 const Cart = () => {
@@ -12,7 +12,7 @@ const Cart = () => {
   const [suggested, setSuggested] = useState([]);
 
   useEffect(() => {
-    axios.get('/api/products?featured=true')
+    apiClient.get('/products?featured=true')
       .then(res => setSuggested((res.data.products || []).slice(0, 4)))
       .catch(() => setSuggested([]));
   }, []);

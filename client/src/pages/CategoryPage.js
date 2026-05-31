@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import axios from 'axios';
+import apiClient from '../utils/apiClient';
 import ProductCard from '../components/ProductCard';
 
 const Skeleton = () => (
@@ -26,7 +26,7 @@ const CategoryPage = ({ category, title, description, icon }) => {
 
   useEffect(() => {
     setLoading(true);
-    axios.get(`/api/products?category=${category}`)
+    apiClient.get(`/products?category=${category}`)
       .then(res => {
         const apiProducts = res.data.products || [];
         if (apiProducts.length > 0) {

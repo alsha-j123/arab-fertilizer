@@ -12,7 +12,7 @@
 import axios from 'axios';
 
 const apiClient = axios.create({
-  baseURL: '/api',
+  baseURL: `${process.env.REACT_APP_API_URL || ''}/api`,
   withCredentials: true,   // sends the HTTP-only af.sid cookie automatically
 });
 

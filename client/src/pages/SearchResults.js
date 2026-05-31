@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import axios from 'axios';
+import apiClient from '../utils/apiClient';
 import { categories } from '../data';
 import ProductCard from '../components/ProductCard';
 
@@ -30,7 +30,7 @@ const SearchResults = () => {
       return [];
     };
 
-    axios.get(`/api/products?search=${encodeURIComponent(q)}`)
+    apiClient.get(`/products?search=${encodeURIComponent(q)}`)
       .then(res => {
         const apiResults = res.data.products || [];
         if (apiResults.length > 0) {

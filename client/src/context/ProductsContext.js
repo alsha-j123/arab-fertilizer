@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
-import axios from 'axios';
+import apiClient from '../utils/apiClient';
 
 const ProductsContext = createContext();
 export const useProducts = () => useContext(ProductsContext);
@@ -18,7 +18,7 @@ export const ProductsProvider = ({ children }) => {
     }
     setLoading(true);
     try {
-      const { data } = await axios.get('/api/products');
+      const { data } = await apiClient.get('/products');
       const p = data.products || [];
       cacheRef.current = { data: p, time: Date.now() };
       setProducts(p);

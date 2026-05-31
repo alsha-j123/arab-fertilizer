@@ -1,10 +1,9 @@
-
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import HeroCarousel from '../components/HeroCarousel';
 import ProductCard from '../components/ProductCard';
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import apiClient from '../utils/apiClient';
 import { categories } from '../data';
 import { IconTag, IconWheat, IconCheck, IconFlask, IconTruck, IconBadgeCheck, IconLeaf, IconCreditCard, IconTrophy } from '../components/SvgIcons';
 
@@ -21,7 +20,7 @@ const fadeUp = {
 const Home = () => {
   const [featured, setFeatured] = useState([]);
   useEffect(() => {
-    axios.get('/api/products?featured=true')
+    apiClient.get('/products?featured=true')
       .then(res => {
         const apiProducts = res.data.products || [];
         if (apiProducts.length > 0) {
