@@ -36,88 +36,72 @@ const Checkout = () => {
   }, [user]);
 
   const [couponCodeInput, setCouponCodeInput] = useState('');
-  const [appliedCoupon, setAppliedCoupon] = useState(null);
-  const [couponError, setCouponError] = useState('');
-  const [couponLoading, setCouponLoading] = useState(false);
-  const [discountAmount, setDiscountAmount] = useState(0);
+  const [appliedCoupon, setAppliedCoupon]     = useState(null);
+  const [couponError, setCouponError]         = useState('');
+  const [couponLoading, setCouponLoading]     = useState(false);
+  const [discountAmount, setDiscountAmount]   = useState(0);
 
-  const shipping = cartTotal >= 5000 ? 0 : 200;
+  const shipping   = cartTotal >= 5000 ? 0 : 200;
   const grandTotal = cartTotal + shipping - discountAmount;
 
   const handleApplyCoupon = async () => {
     if (!couponCodeInput) return;
-    setCouponLoading(true);
-    setCouponError('');
+    setCouponLoading(true); setCouponError('');
     try {
-      const { data } = await apiClient.post('/orders/validate-coupon', {
-        code: couponCodeInput,
-        orderAmount: cartTotal
-      });
-      if (data.success) {
-        setAppliedCoupon(data.coupon);
-        setDiscountAmount(data.coupon.discount);
-      }
+      const { data } = await apiClient.post('/orders/validate-coupon', { code: couponCodeInput, orderAmount: cartTotal });
+      if (data.success) { setAppliedCoupon(data.coupon); setDiscountAmount(data.coupon.discount); }
     } catch (err) {
       setCouponError(err.response?.data?.message || 'Invalid coupon code');
-      setAppliedCoupon(null);
-      setDiscountAmount(0);
-    } finally {
-      setCouponLoading(false);
-    }
+      setAppliedCoupon(null); setDiscountAmount(0);
+    } finally { setCouponLoading(false); }
   };
 
   const handleRemoveCoupon = () => {
-    setAppliedCoupon(null);
-    setDiscountAmount(0);
-    setCouponCodeInput('');
-    setCouponError('');
+    setAppliedCoupon(null); setDiscountAmount(0); setCouponCodeInput(''); setCouponError('');
   };
 
   const handleChange = (e) => setForm(f => ({ ...f, [e.target.name]: e.target.value }));
 
   const handleOrder = async (e) => {
     e.preventDefault();
-    if (!user) { setShowAuthModal(true); return; }
+    if (!user)                { setShowAuthModal(true); return; }
     if (cartItems.length === 0) { setError('Your cart is empty'); return; }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(form.email)) {
       setError('Please enter a valid email address');
-      window.scrollTo(0, 0);
-      return;
+      window.scrollTo(0, 0); return;
     }
 
-    if (paymentMethod === 'bank') {
-      if (!form.bankName || !form.accountName || !form.transactionId) {
-        setError('Please fill in all bank transaction details');
-        window.scrollTo(0, 0);
-        return;
-      }
+    if (paymentMethod === 'bank' && (!form.bankName || !form.accountName || !form.transactionId)) {
+      setError('Please fill in all bank transaction details');
+      window.scrollTo(0, 0); return;
     }
 
-    setLoading(true);
-    setError('');
-
+    setLoading(true); setError('');
     try {
       const orderPayload = {
-        // ✅ FIX: name + price included so server can build email & calculate total
         items: cartItems.map(i => ({
           product:  i._id,
           name:     i.name,
           price:    i.discountPrice || i.price,
           quantity: i.quantity,
-          weight:   i.weight || '',
-          imageUrl: i.imageUrl || i.images?.[0] || '',
+          weight:   i.weight  || '',
+          image:    i.imageUrl || i.images?.[0] || '',  // matches Order schema: image (not imageUrl)
         })),
+
+        // ✅ Keys match Order model shippingAddress schema EXACTLY:
+        // name, email, phone, street, city, province, postalCode
         shippingAddress: {
-          fullName:   form.name,   // ← matches mailer.js key
+          name:       form.name,
           email:      form.email,
           phone:      form.phone,
-          address:    form.street, // ← matches mailer.js key
+          street:     form.street,
           city:       form.city,
           province:   form.province,
           postalCode: form.postalCode,
         },
+
         paymentMethod,
         couponCode: appliedCoupon ? appliedCoupon.code : '',
         paymentDetails: paymentMethod === 'bank' ? {
@@ -128,11 +112,11 @@ const Checkout = () => {
       };
 
       const { data } = await apiClient.post('/orders', orderPayload);
-
       clearCart();
       navigate(`/order-success?orderId=${data.order._id}`);
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to place order. Please try again.');
+      window.scrollTo(0, 0);
     } finally {
       setLoading(false);
     }
@@ -154,7 +138,8 @@ const Checkout = () => {
   return (
     <div style={{ paddingTop: 72, background: '#f5f5f5', minHeight: '100vh' }}>
       <div style={{ maxWidth: 1100, margin: '0 auto', padding: '40px 24px' }}>
-        <motion.h1 initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} style={{ fontFamily: 'Playfair Display', fontSize: '2rem', marginBottom: 32, color: '#1a1a1a' }}>
+        <motion.h1 initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }}
+          style={{ fontFamily: 'Playfair Display', fontSize: '2rem', marginBottom: 32, color: '#1a1a1a' }}>
           Checkout
         </motion.h1>
 
@@ -166,32 +151,38 @@ const Checkout = () => {
 
         <form onSubmit={handleOrder}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', gap: 28, alignItems: 'start' }}>
-            {/* Left — Form */}
+
+            {/* ── Left Column ── */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-              {/* Shipping */}
+
+              {/* Shipping Info */}
               <div style={{ background: 'white', borderRadius: 14, padding: '28px', boxShadow: '0 2px 16px rgba(0,0,0,0.06)' }}>
                 <h2 style={{ fontFamily: 'Playfair Display', fontSize: '1.2rem', marginBottom: 22, color: '#1a1a1a', display: 'flex', alignItems: 'center', gap: 10 }}>
                   📦 Shipping Information
                 </h2>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
                   {[
-                    { name: 'name',       label: 'Full Name *',       type: 'text',  placeholder: 'Muhammad Ahmed',         col: 2 },
-                    { name: 'email',      label: 'Email Address *',   type: 'email', placeholder: 'ahmed@example.com',      col: 2 },
-                    { name: 'phone',      label: 'Phone Number *',    type: 'tel',   placeholder: '03XX-XXXXXXX',           col: 1 },
-                    { name: 'city',       label: 'City *',            type: 'text',  placeholder: 'Lahore',                 col: 1 },
-                    { name: 'street',     label: 'Street Address *',  type: 'text',  placeholder: 'House #, Street, Area',  col: 2 },
-                    { name: 'province',   label: 'Province',          type: 'text',  placeholder: 'Punjab',                 col: 1 },
-                    { name: 'postalCode', label: 'Postal Code',       type: 'text',  placeholder: '54000',                  col: 1 }
+                    { name: 'name',       label: 'Full Name *',      type: 'text',  placeholder: 'Muhammad Ahmed',        col: 2 },
+                    { name: 'email',      label: 'Email Address *',  type: 'email', placeholder: 'ahmed@example.com',     col: 2 },
+                    { name: 'phone',      label: 'Phone Number *',   type: 'tel',   placeholder: '03XX-XXXXXXX',          col: 1 },
+                    { name: 'city',       label: 'City *',           type: 'text',  placeholder: 'Lahore',                col: 1 },
+                    { name: 'street',     label: 'Street Address *', type: 'text',  placeholder: 'House #, Street, Area', col: 2 },
+                    { name: 'province',   label: 'Province',         type: 'text',  placeholder: 'Punjab',                col: 1 },
+                    { name: 'postalCode', label: 'Postal Code',      type: 'text',  placeholder: '54000',                 col: 1 },
                   ].map(field => (
                     <div key={field.name} style={{ gridColumn: `span ${field.col}` }}>
-                      <label style={{ display: 'block', marginBottom: 6, fontWeight: 600, fontSize: '0.85rem', color: '#444' }}>{field.label}</label>
+                      <label style={{ display: 'block', marginBottom: 6, fontWeight: 600, fontSize: '0.85rem', color: '#444' }}>
+                        {field.label}
+                      </label>
                       <input
                         type={field.type} name={field.name} placeholder={field.placeholder}
                         value={form[field.name]} onChange={handleChange}
                         required={field.label.includes('*')}
-                        style={{ width: '100%', padding: '11px 14px', border: '1.5px solid #e0e0e0', borderRadius: 8, fontSize: '0.9rem', outline: 'none', boxSizing: 'border-box', fontFamily: 'Cairo, sans-serif', transition: 'border-color 0.2s' }}
+                        style={{ width: '100%', padding: '11px 14px', border: '1.5px solid #e0e0e0', borderRadius: 8,
+                          fontSize: '0.9rem', outline: 'none', boxSizing: 'border-box',
+                          fontFamily: 'Cairo, sans-serif', transition: 'border-color 0.2s' }}
                         onFocus={e => e.target.style.borderColor = '#2D5A27'}
-                        onBlur={e => e.target.style.borderColor = '#e0e0e0'}
+                        onBlur={e  => e.target.style.borderColor = '#e0e0e0'}
                       />
                     </div>
                   ))}
@@ -206,17 +197,16 @@ const Checkout = () => {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                   {[
                     { value: 'cod',  icon: '💵', title: 'Cash on Delivery', desc: 'Pay when your order arrives at your doorstep' },
-                    { value: 'bank', icon: '🏦', title: 'Bank Transfer',    desc: 'Transfer directly to our bank account' }
+                    { value: 'bank', icon: '🏦', title: 'Bank Transfer',    desc: 'Transfer directly to our bank account' },
                   ].map(opt => (
                     <label key={opt.value} style={{
                       display: 'flex', alignItems: 'center', gap: 16, padding: '16px 20px',
                       border: `2px solid ${paymentMethod === opt.value ? '#2D5A27' : '#e0e0e0'}`,
-                      borderRadius: 10, cursor: 'pointer', background: paymentMethod === opt.value ? '#f8fdf6' : 'white',
-                      transition: 'all 0.2s'
+                      borderRadius: 10, cursor: 'pointer',
+                      background: paymentMethod === opt.value ? '#f8fdf6' : 'white', transition: 'all 0.2s',
                     }}>
                       <input type="radio" name="payment" value={opt.value}
-                        checked={paymentMethod === opt.value}
-                        onChange={() => setPaymentMethod(opt.value)}
+                        checked={paymentMethod === opt.value} onChange={() => setPaymentMethod(opt.value)}
                         style={{ accentColor: '#2D5A27', width: 18, height: 18 }} />
                       <span style={{ fontSize: '1.4rem' }}>{opt.icon}</span>
                       <div>
@@ -228,7 +218,8 @@ const Checkout = () => {
                 </div>
 
                 {paymentMethod === 'bank' && (
-                  <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} style={{ marginTop: 20, padding: 20, background: '#f9f9f9', borderRadius: 10, border: '1px solid #eee' }}>
+                  <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}
+                    style={{ marginTop: 20, padding: 20, background: '#f9f9f9', borderRadius: 10, border: '1px solid #eee' }}>
                     <div style={{ marginBottom: 16 }}>
                       <h4 style={{ fontSize: '0.9rem', marginBottom: 8, color: '#1a1a1a' }}>Our Bank Details:</h4>
                       <div style={{ fontSize: '0.82rem', color: '#666', lineHeight: 1.6, background: 'white', padding: 12, borderRadius: 8, border: '1px dashed #2D5A27' }}>
@@ -260,7 +251,7 @@ const Checkout = () => {
               </div>
             </div>
 
-            {/* Right — Order Summary */}
+            {/* ── Right Column — Order Summary ── */}
             <div style={{ background: 'white', borderRadius: 14, padding: '24px', boxShadow: '0 2px 16px rgba(0,0,0,0.06)', position: 'sticky', top: 90 }}>
               <h2 style={{ fontFamily: 'Playfair Display', fontSize: '1.2rem', marginBottom: 20, paddingBottom: 14, borderBottom: '1px solid #eee' }}>
                 🧾 Order Summary
@@ -273,7 +264,7 @@ const Checkout = () => {
                       style={{ width: 52, height: 52, objectFit: 'cover', borderRadius: 8 }} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: '0.85rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {item.name} {item.weight && <span style={{ color: '#888', fontSize: '0.78rem', fontWeight: 400 }}>({item.weight})</span>}
+                        {item.name}{item.weight && <span style={{ color: '#888', fontSize: '0.78rem', fontWeight: 400 }}> ({item.weight})</span>}
                       </div>
                       <div style={{ fontSize: '0.78rem', color: '#888' }}>×{item.quantity}</div>
                     </div>
@@ -289,8 +280,8 @@ const Checkout = () => {
                 <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#555', marginBottom: 8 }}>Have a promo code?</label>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <input type="text" placeholder="Enter coupon code" value={couponCodeInput}
-                    onChange={(e) => setCouponCodeInput(e.target.value.toUpperCase())}
-                    disabled={couponLoading || appliedCoupon}
+                    onChange={e => setCouponCodeInput(e.target.value.toUpperCase())}
+                    disabled={couponLoading || !!appliedCoupon}
                     style={{ flex: 1, padding: '8px 12px', border: '1.5px solid #e0e0e0', borderRadius: 8, fontSize: '0.85rem', outline: 'none', textTransform: 'uppercase' }} />
                   {appliedCoupon ? (
                     <button type="button" onClick={handleRemoveCoupon}
@@ -306,10 +297,11 @@ const Checkout = () => {
                     </button>
                   )}
                 </div>
-                {couponError  && <div style={{ color: '#c0392b', fontSize: '0.75rem', marginTop: 6, fontWeight: 500 }}>⚠️ {couponError}</div>}
+                {couponError   && <div style={{ color: '#c0392b', fontSize: '0.75rem', marginTop: 6, fontWeight: 500 }}>⚠️ {couponError}</div>}
                 {appliedCoupon && <div style={{ color: '#27ae60', fontSize: '0.75rem', marginTop: 6, fontWeight: 600 }}>🎉 Coupon "{appliedCoupon.code}" applied!</div>}
               </div>
 
+              {/* Totals */}
               <div style={{ borderTop: '1px solid #eee', paddingTop: 14 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10, fontSize: '0.88rem', color: '#666' }}>
                   <span>Subtotal</span>
@@ -343,7 +335,7 @@ const Checkout = () => {
                 width: '100%', padding: '15px', background: '#2D5A27', color: 'white',
                 border: 'none', borderRadius: 10, fontWeight: 700, fontSize: '1rem',
                 cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.7 : 1,
-                transition: 'all 0.3s', fontFamily: 'Cairo, sans-serif'
+                transition: 'all 0.3s', fontFamily: 'Cairo, sans-serif',
               }}
               onMouseEnter={e => { if (!loading) e.currentTarget.style.background = '#3a7a31'; }}
               onMouseLeave={e => e.currentTarget.style.background = '#2D5A27'}>

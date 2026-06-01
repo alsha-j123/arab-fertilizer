@@ -1,62 +1,138 @@
-const mongoose = require('mongoose');
+const express = require("express");
+const router = express.Router();
+const Order = require("../models/Order");
+const { protect } = require("../middleware/authMiddleware");
+const { isAdmin } = require("../middleware/adminMiddleware");
+const { sendOrderConfirmation } = require("../utils/mailer");
 
-const orderSchema = new mongoose.Schema({
-  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  items: [{
-    product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
-    name: String,
-    image: String,
-    price: Number,
-    weight: String,
-    quantity: { type: Number, required: true, min: 1 }
-  }],
-  totalAmount: { type: Number, required: true },
-  subtotal: { type: Number, required: true, default: 0 },
-  shippingCost: { type: Number, default: 0 },
-  discountAmount: { type: Number, default: 0 },
-  couponCode: String,
-  paymentMethod: { type: String, enum: ['cod', 'bank'], required: true },
-  paymentStatus: {
-    type: String,
-    enum: ['pending', 'paid', 'failed', 'refunded', 'rejected'],
-    default: 'pending'
-  },
-  paymentDetails: {
-    bankName: String,
-    accountName: String,
-    transactionId: String
-  },
-  deliveryStatus: {
-    type: String,
-    enum: ['pending', 'processing', 'shipped', 'delivered', 'cancelled'],
-    default: 'pending'
-  },
-  shippingAddress: {
-    name: { type: String, required: true },
-    email: { type: String },
-    phone: { type: String, required: true },
-    street: { type: String, required: true },
-    city: { type: String, required: true },
-    province: String,
-    postalCode: String
-  },
-  orderNotes: String,
-  estimatedDelivery: { type: Date },
-  trackingNumber: String
-}, { timestamps: true });
+// ─────────────────────────────────────────
+// POST /api/orders  —  Place a new order
+// ─────────────────────────────────────────
+router.post("/", protect, async (req, res) => {
+  try {
+    const { items, shippingAddress, paymentMethod, paymentDetails, couponCode } = req.body;
 
-// Auto-set estimated delivery (3-5 business days)
-orderSchema.pre('save', function (next) {
-  if (this.isNew) {
-    const delivery = new Date();
-    delivery.setDate(delivery.getDate() + 5);
-    this.estimatedDelivery = delivery;
+    if (!items || items.length === 0) {
+      return res.status(400).json({ message: "No order items provided." });
+    }
+
+    // Calculate all amounts server-side
+    const subtotal     = items.reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 1), 0);
+    const shippingCost = subtotal >= 5000 ? 0 : 200;
+    const totalAmount  = subtotal + shippingCost;
+
+    const order = await Order.create({
+      user:            req.user._id,
+      items,
+      shippingAddress,          // keys must match schema: name, street, phone, city
+      paymentMethod,
+      paymentDetails:  paymentDetails || null,
+      couponCode:      couponCode || '',
+      subtotal,
+      shippingCost,
+      totalAmount,
+      status:          "pending",
+    });
+
+    // Send confirmation email to the customer
+    const customerEmail = req.user.email;
+    if (customerEmail) {
+      try {
+        await sendOrderConfirmation(customerEmail, order);
+      } catch (mailErr) {
+        console.error("Email send failed (non-fatal):", mailErr.message);
+      }
+    }
+
+    res.status(201).json({ success: true, order });
+  } catch (err) {
+    console.error("Order creation error:", err.message);
+    res.status(500).json({ message: err.message });
   }
-  next();
 });
 
-orderSchema.index({ user: 1, createdAt: -1 });
-orderSchema.index({ deliveryStatus: 1, createdAt: -1 });
-orderSchema.index({ paymentStatus: 1, createdAt: -1 });
+// ─────────────────────────────────────────
+// POST /api/orders/validate-coupon
+// ─────────────────────────────────────────
+router.post("/validate-coupon", protect, async (req, res) => {
+  return res.status(404).json({ success: false, message: "Invalid coupon code" });
+});
 
-module.exports = mongoose.models.Order || mongoose.model('Order', orderSchema);
+// ─────────────────────────────────────────
+// GET /api/orders/my  —  Current user's orders
+// ─────────────────────────────────────────
+router.get("/my", protect, async (req, res) => {
+  try {
+    const orders = await Order.find({ user: req.user._id }).sort({ createdAt: -1 });
+    res.json(orders);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// ─────────────────────────────────────────
+// GET /api/orders  —  Admin: all orders
+// ─────────────────────────────────────────
+router.get("/", protect, isAdmin, async (req, res) => {
+  try {
+    const orders = await Order.find().populate("user", "name email").sort({ createdAt: -1 });
+    res.json(orders);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// ─────────────────────────────────────────
+// GET /api/orders/:id  —  Single order
+// ─────────────────────────────────────────
+router.get("/:id", protect, async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id).populate("user", "name email");
+    if (!order) return res.status(404).json({ message: "Order not found." });
+
+    const isOwner = order.user._id.toString() === req.user._id.toString();
+    if (!isOwner && req.user.role !== "admin") {
+      return res.status(403).json({ message: "Not authorised." });
+    }
+    res.json(order);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// ─────────────────────────────────────────
+// PATCH /api/orders/:id/status  —  Admin
+// ─────────────────────────────────────────
+router.patch("/:id/status", protect, isAdmin, async (req, res) => {
+  try {
+    const { status } = req.body;
+    const validStatuses = ["pending", "processing", "shipped", "delivered", "cancelled"];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ message: "Invalid status value." });
+    }
+    const order = await Order.findByIdAndUpdate(
+      req.params.id,
+      { deliveryStatus: status },
+      { new: true }
+    ).populate("user", "name email");
+    if (!order) return res.status(404).json({ message: "Order not found." });
+    res.json({ success: true, order });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// ─────────────────────────────────────────
+// DELETE /api/orders/:id  —  Admin
+// ─────────────────────────────────────────
+router.delete("/:id", protect, isAdmin, async (req, res) => {
+  try {
+    const order = await Order.findByIdAndDelete(req.params.id);
+    if (!order) return res.status(404).json({ message: "Order not found." });
+    res.json({ success: true, message: "Order deleted." });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+module.exports = router;
