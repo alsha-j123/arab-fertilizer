@@ -82,6 +82,47 @@ router.get("/", protect, isAdmin, async (req, res) => {
   }
 });
 
+// TEMPORARY DEBUG — no auth needed, remove after fixing
+router.get("/test-email-debug", async (req, res) => {
+  try {
+    console.log("EMAIL_USER set:", !!process.env.EMAIL_USER);
+    console.log("EMAIL_PASS set:", !!process.env.EMAIL_PASS);
+    console.log("EMAIL_USER value:", process.env.EMAIL_USER);
+
+    const nodemailer = require("nodemailer");
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+      },
+    });
+
+    const info = await transporter.sendMail({
+      from: `"Arab Fertilizers" <${process.env.EMAIL_USER}>`,
+      to: "ayeshajavid310@gmail.com",
+      subject: "Test Email Debug",
+      html: "<p>If you see this, email is working!</p>",
+    });
+
+    res.json({ 
+      success: true, 
+      messageId: info.messageId,
+      EMAIL_USER: process.env.EMAIL_USER,
+      EMAIL_PASS_SET: !!process.env.EMAIL_PASS,
+      EMAIL_PASS_LENGTH: (process.env.EMAIL_PASS || "").length
+    });
+  } catch (err) {
+    res.json({ 
+      success: false, 
+      error: err.message,
+      EMAIL_USER: process.env.EMAIL_USER,
+      EMAIL_PASS_SET: !!process.env.EMAIL_PASS,
+      EMAIL_PASS_LENGTH: (process.env.EMAIL_PASS || "").length
+    });
+  }
+});
+
 // ─────────────────────────────────────────
 // GET /api/orders/:id  —  Single order
 // ─────────────────────────────────────────
