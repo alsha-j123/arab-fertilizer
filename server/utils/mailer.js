@@ -1,111 +1,172 @@
-const nodemailer = require('nodemailer');
+/**
+ * mailer.js — Email delivery via Resend API
+ *
+ * WHY RESEND INSTEAD OF GMAIL SMTP?
+ * Render's free tier blocks all outbound SMTP connections (ports 465 & 587).
+ * This causes "Connection timeout" errors with nodemailer + Gmail SMTP.
+ * Resend uses HTTPS (port 443) which is never blocked, and has a free tier
+ * of 3,000 emails/month — more than enough for this app.
+ *
+ * SETUP (5 minutes):
+ *   1. Go to https://resend.com and create a free account
+ *   2. Dashboard → API Keys → Create API Key → copy it
+ *   3. Add to Render environment variables:
+ *        RESEND_API_KEY = re_xxxxxxxxxxxxxxxxxxxx
+ *   4. (Optional but recommended) Add your domain in Resend → Domains
+ *      and update EMAIL_FROM to use that domain for better deliverability.
+ *      Until then, use: EMAIL_FROM=Arab Fertilizer <onboarding@resend.dev>
+ *      (Resend's shared domain works immediately, no DNS setup needed)
+ */
+
+const https = require('https');
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SMTP transporter — created ONCE at module load, not per email call.
-// Creating a new transport per email wastes TCP connections and causes
-// "too many connections" errors on Gmail SMTP on high-traffic deployments.
-//
-// FIX: Gmail SMTP requires the "from" address to match the authenticated
-//      EMAIL_USER.  Using a custom domain as the from address causes Gmail to
-//      reject the message with a 530/535 error.  We always derive the display
-//      "from" from EMAIL_USER so the SMTP AUTH and the envelope sender match.
+// Low-level Resend API call (pure Node.js https — no extra dependency needed)
 // ─────────────────────────────────────────────────────────────────────────────
-
-let _transporter = null;
-
-const getTransporter = () => {
-  if (_transporter) return _transporter;
-
-  const user = process.env.EMAIL_USER;
-  // Strip ALL whitespace from the app password (copy-paste can add spaces)
-  const pass = process.env.EMAIL_PASS ? process.env.EMAIL_PASS.replace(/\s/g, '') : '';
-
-  if (!user || !pass) {
-    throw new Error(
-      '[mailer] Email configuration missing: EMAIL_USER and EMAIL_PASS must be set in environment variables.\n' +
-      '  EMAIL_USER should be your Gmail address (e.g. arabagro89@gmail.com)\n' +
-      '  EMAIL_PASS should be a 16-character Gmail App Password (NOT your regular password)\n' +
-      '  Generate one at: Google Account → Security → 2-Step Verification → App passwords'
-    );
-  }
-
-  _transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 465,
-    secure: true, // SSL — required for port 465
-    auth: { user, pass },
-    connectionTimeout: 15000,  // 15s — Render cold starts can be slow
-    greetingTimeout: 15000,
-    socketTimeout: 20000,
-    // Pool connections to avoid creating a new TCP connection for each email
-    pool: true,
-    maxConnections: 3,
-    maxMessages: 100,
-  });
-
-  return _transporter;
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// testConnection — call on server startup to detect bad credentials early
-// ─────────────────────────────────────────────────────────────────────────────
-const testConnection = async () => {
-  try {
-    const transport = getTransporter();
-    await transport.verify();
-    console.log(`[mailer] ✅ SMTP connection verified for ${process.env.EMAIL_USER}`);
-    return true;
-  } catch (err) {
-    console.error('[mailer] ❌ SMTP connection FAILED:', err.message);
-    if (err.responseCode === 535 || err.code === 'EAUTH') {
-      console.error(
-        '[mailer] ⚠️  Authentication failed. Common causes:\n' +
-        '  1. Using your regular Gmail password instead of an App Password\n' +
-        '  2. 2-Step Verification not enabled on the Gmail account\n' +
-        '  3. App Password was revoked or expired\n' +
-        '  Fix: Go to Google Account → Security → 2-Step Verification → App passwords → Create new'
-      );
+const sendViaResend = ({ from, to, subject, html, replyTo }) => {
+  return new Promise((resolve, reject) => {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      return reject(new Error(
+        '[mailer] RESEND_API_KEY is not set.\n' +
+        '  → Sign up free at https://resend.com\n' +
+        '  → Dashboard → API Keys → Create API Key\n' +
+        '  → Add RESEND_API_KEY to Render Environment Variables'
+      ));
     }
-    // Don't throw — server should still start even if email is misconfigured
-    return false;
-  }
+
+    const body = JSON.stringify({
+      from,
+      to: Array.isArray(to) ? to : [to],
+      subject,
+      html,
+      ...(replyTo ? { reply_to: replyTo } : {}),
+    });
+
+    const options = {
+      hostname: 'api.resend.com',
+      port: 443,
+      path: '/emails',
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+      },
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resolve({ messageId: parsed.id, status: res.statusCode });
+          } else {
+            reject(new Error(
+              `Resend API error ${res.statusCode}: ${parsed.message || parsed.name || data}`
+            ));
+          }
+        } catch (e) {
+          reject(new Error(`Resend API parse error: ${data}`));
+        }
+      });
+    });
+
+    req.on('error', reject);
+    req.setTimeout(20000, () => {
+      req.destroy(new Error('Resend API request timed out after 20s'));
+    });
+
+    req.write(body);
+    req.end();
+  });
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FIX: "from" must always be the Gmail account used for AUTH.
-// EMAIL_FROM can provide a display name: "Arab Fertilizer <you@gmail.com>"
-// but the address portion MUST equal EMAIL_USER.
+// getSenderAddress — derive the "from" field
+//
+// Priority:
+//   1. EMAIL_FROM env var (e.g. "Arab Fertilizer <arabagro89@gmail.com>")
+//      → only works once you verify your domain in Resend
+//   2. Resend's shared domain (works immediately, no DNS setup):
+//      "Arab Fertilizer <onboarding@resend.dev>"
 // ─────────────────────────────────────────────────────────────────────────────
 const getSenderAddress = () => {
-  const user = process.env.EMAIL_USER;
-  const fromEnv = process.env.EMAIL_FROM || '';
-
-  // If EMAIL_FROM is set and contains the EMAIL_USER address, use it as-is.
-  if (fromEnv && user && fromEnv.includes(user)) {
-    return fromEnv;
-  }
-
-  // Otherwise build a safe sender using just EMAIL_USER (always valid for Gmail)
-  return user ? `Arab Fertilizer <${user}>` : 'Arab Fertilizer';
+  if (process.env.EMAIL_FROM) return process.env.EMAIL_FROM;
+  // Resend shared domain — works out of the box with no domain verification
+  return 'Arab Fertilizer <onboarding@resend.dev>';
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// testConnection — verify the API key is valid at server startup
+// ─────────────────────────────────────────────────────────────────────────────
+const testConnection = () => {
+  return new Promise((resolve) => {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      console.error(
+        '[mailer] ❌ RESEND_API_KEY is not set!\n' +
+        '  Emails will NOT be sent until this is configured.\n' +
+        '  → Sign up free at https://resend.com\n' +
+        '  → Create an API key and add RESEND_API_KEY to Render Environment Variables'
+      );
+      return resolve(false);
+    }
+
+    // Call Resend's /domains endpoint to verify the key is valid
+    const options = {
+      hostname: 'api.resend.com',
+      port: 443,
+      path: '/domains',
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+    };
+
+    const req = https.request(options, (res) => {
+      if (res.statusCode === 200 || res.statusCode === 404) {
+        console.log('[mailer] ✅ Resend API key verified — emails ready to send');
+        resolve(true);
+      } else if (res.statusCode === 401 || res.statusCode === 403) {
+        console.error(
+          `[mailer] ❌ Resend API key invalid (HTTP ${res.statusCode})\n` +
+          '  → Check RESEND_API_KEY in Render Environment Variables\n' +
+          '  → Generate a new key at https://resend.com/api-keys'
+        );
+        resolve(false);
+      } else {
+        console.warn(`[mailer] ⚠️ Resend API responded with HTTP ${res.statusCode} during key check`);
+        resolve(true); // Don't block startup for unexpected status codes
+      }
+    });
+    req.on('error', (err) => {
+      console.error('[mailer] ❌ Could not reach Resend API:', err.message);
+      resolve(false);
+    });
+    req.setTimeout(10000, () => {
+      req.destroy();
+      console.warn('[mailer] ⚠️ Resend API key check timed out — proceeding anyway');
+      resolve(true);
+    });
+    req.end();
+  });
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared helpers
+// ─────────────────────────────────────────────────────────────────────────────
 const formatCurrency = (amount) =>
   `PKR ${Number(amount).toLocaleString('en-PK')}`;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helper: safely convert an _id (ObjectId, string, or plain object) to string.
-// ─────────────────────────────────────────────────────────────────────────────
 const idToString = (id) => {
   if (!id) return 'UNKNOWN';
   if (typeof id === 'string') return id;
+  if (id.$oid) return id.$oid;
   if (typeof id.toString === 'function') return id.toString();
-  if (id.$oid) return id.$oid; // BSON extended JSON
   return String(id);
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helper: safely extract shipping address fields from a deserialized order.
-// ─────────────────────────────────────────────────────────────────────────────
 const safeAddress = (order) => {
   const addr = order.shippingAddress || {};
   return {
@@ -116,156 +177,134 @@ const safeAddress = (order) => {
   };
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helper: build items + pricing HTML rows (shared between customer & admin)
-// ─────────────────────────────────────────────────────────────────────────────
 const buildOrderTableHtml = (order) => {
   const items = Array.isArray(order.items) ? order.items : [];
 
-  const itemsHtml = items
-    .map(
-      (item) => `
-      <tr style="border-bottom:1px solid #eee">
-        <td style="padding:12px;color:#333">${item.name || 'Item'}</td>
-        <td style="padding:12px;text-align:center;color:#666">${item.quantity || 0}</td>
-        <td style="padding:12px;text-align:right;color:#2D5A27;font-weight:600">${formatCurrency((item.price || 0) * (item.quantity || 0))}</td>
-      </tr>
-    `
-    )
-    .join('');
+  const itemsHtml = items.map((item) => `
+    <tr style="border-bottom:1px solid #eee">
+      <td style="padding:12px;color:#333">${item.name || 'Item'}</td>
+      <td style="padding:12px;text-align:center;color:#666">${item.quantity || 0}</td>
+      <td style="padding:12px;text-align:right;color:#2D5A27;font-weight:600">
+        ${formatCurrency((item.price || 0) * (item.quantity || 0))}
+      </td>
+    </tr>`).join('');
 
-  const subtotalVal =
-    order.subtotal !== undefined ? order.subtotal : order.totalAmount || 0;
-  const shippingVal =
-    order.shippingCost !== undefined ? order.shippingCost : 0;
-  const discountVal =
-    order.discountAmount !== undefined ? order.discountAmount : 0;
+  const subtotalVal = order.subtotal !== undefined ? order.subtotal : order.totalAmount || 0;
+  const shippingVal = order.shippingCost !== undefined ? order.shippingCost : 0;
+  const discountVal = order.discountAmount !== undefined ? order.discountAmount : 0;
 
   let pricingRows = `
     <tr style="border-top:1px solid #eee">
-      <td colspan="2" style="padding:10px 12px;text-align:left;color:#555;font-size:14px">Subtotal</td>
+      <td colspan="2" style="padding:10px 12px;color:#555;font-size:14px">Subtotal</td>
       <td style="padding:10px 12px;text-align:right;color:#333;font-size:14px;font-weight:600">${formatCurrency(subtotalVal)}</td>
     </tr>
     <tr>
-      <td colspan="2" style="padding:10px 12px;text-align:left;color:#555;font-size:14px">Shipping</td>
+      <td colspan="2" style="padding:10px 12px;color:#555;font-size:14px">Shipping</td>
       <td style="padding:10px 12px;text-align:right;color:#333;font-size:14px;font-weight:600">${shippingVal === 0 ? 'FREE' : formatCurrency(shippingVal)}</td>
-    </tr>
-  `;
+    </tr>`;
 
   if (discountVal > 0) {
     pricingRows += `
-      <tr>
-        <td colspan="2" style="padding:10px 12px;text-align:left;color:#e74c3c;font-size:14px">Discount ${order.couponCode ? `(${order.couponCode})` : ''}</td>
-        <td style="padding:10px 12px;text-align:right;color:#e74c3c;font-size:14px;font-weight:600">-${formatCurrency(discountVal)}</td>
-      </tr>
-    `;
+    <tr>
+      <td colspan="2" style="padding:10px 12px;color:#e74c3c;font-size:14px">Discount${order.couponCode ? ` (${order.couponCode})` : ''}</td>
+      <td style="padding:10px 12px;text-align:right;color:#e74c3c;font-size:14px;font-weight:600">-${formatCurrency(discountVal)}</td>
+    </tr>`;
   }
 
   pricingRows += `
     <tr style="background:#f0f8ee;border-top:2px solid #2D5A27">
       <td colspan="2" style="padding:12px;font-weight:700;color:#333">Total Amount</td>
       <td style="padding:12px;text-align:right;font-weight:700;font-size:18px;color:#2D5A27">${formatCurrency(order.totalAmount || 0)}</td>
-    </tr>
-  `;
+    </tr>`;
 
   return { itemsHtml, pricingRows };
 };
 
+// Shared email wrapper element
+const emailWrapper = (content) => `<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#f5f5f5;font-family:'Segoe UI',Arial,sans-serif">
+  <div style="max-width:600px;margin:30px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.08)">
+    ${content}
+  </div>
+</body>
+</html>`;
+
 // ─────────────────────────────────────────────────────────────────────────────
-// sendOrderConfirmation — sends branded HTML email to the customer
+// sendOrderConfirmation — customer confirmation email
 // ─────────────────────────────────────────────────────────────────────────────
 const sendOrderConfirmation = async (email, userName, order) => {
   if (!email) throw new Error('[mailer] sendOrderConfirmation: email is required');
 
-  const transporter = getTransporter();
   const { itemsHtml, pricingRows } = buildOrderTableHtml(order);
   const addr = safeAddress(order);
   const orderId = idToString(order._id).substring(0, 12).toUpperCase();
 
-  const html = `
-    <!DOCTYPE html>
-    <html>
-    <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
-    <body style="margin:0;padding:0;background:#f5f5f5;font-family:'Segoe UI',Arial,sans-serif">
-      <div style="max-width:600px;margin:30px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.08)">
-        <!-- Header -->
-        <div style="background:linear-gradient(135deg,#2D5A27,#5D4037);padding:40px 30px;text-align:center">
-          <h1 style="color:#C8A951;margin:0;font-size:28px;letter-spacing:1px">🌿 Arab Fertilizer</h1>
-          <p style="color:rgba(255,255,255,0.85);margin:8px 0 0;font-size:14px">Fertilizers & Agro Chemicals</p>
-        </div>
-        
-        <!-- Body -->
-        <div style="padding:35px 30px">
-          <h2 style="color:#2D5A27;margin:0 0 8px">Order Confirmed! ✅</h2>
-          <p style="color:#666;margin:0 0 25px">Dear <strong>${userName}</strong>, your order has been successfully placed.</p>
-          
-          <div style="background:#f9f9f9;border-radius:8px;padding:16px 20px;margin-bottom:25px;border-left:4px solid #2D5A27">
-            <p style="margin:0;font-size:13px;color:#888">Order ID</p>
-            <p style="margin:4px 0 0;font-size:18px;font-weight:700;color:#333;letter-spacing:1px">#${orderId}</p>
-          </div>
-          
-          <!-- Items -->
-          <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
-            <thead>
-              <tr style="background:#2D5A27">
-                <th style="padding:12px;text-align:left;color:#fff">Product</th>
-                <th style="padding:12px;text-align:center;color:#fff">Qty</th>
-                <th style="padding:12px;text-align:right;color:#fff">Amount</th>
-              </tr>
-            </thead>
-            <tbody>${itemsHtml}</tbody>
-            <tfoot>${pricingRows}</tfoot>
-          </table>
-          
-          <!-- Details -->
-          <table style="width:100%;border-collapse:collapse;margin-bottom:25px">
-            <tr>
-              <td style="width:50%;padding:0 8px 0 0;vertical-align:top">
-                <div style="background:#f9f9f9;border-radius:8px;padding:15px">
-                  <p style="margin:0;font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px">Payment Method</p>
-                  <p style="margin:5px 0 0;font-weight:600;color:#333">${order.paymentMethod === 'cod' ? '💵 Cash on Delivery' : '🏦 Bank Transfer'}</p>
-                </div>
-              </td>
-              <td style="width:50%;padding:0 0 0 8px;vertical-align:top">
-                <div style="background:#f9f9f9;border-radius:8px;padding:15px">
-                  <p style="margin:0;font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px">Est. Delivery</p>
-                  <p style="margin:5px 0 0;font-weight:600;color:#333">${order.estimatedDelivery ? new Date(order.estimatedDelivery).toLocaleDateString('en-PK', { weekday: 'long', month: 'long', day: 'numeric' }) : '3–5 Business Days'}</p>
-                </div>
-              </td>
-            </tr>
-          </table>
-          
-          <div style="background:#f9f9f9;border-radius:8px;padding:15px;margin-bottom:25px">
-            <p style="margin:0;font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px">Delivery Address</p>
-            <p style="margin:5px 0 0;font-weight:600;color:#333">${addr.name}</p>
-            <p style="margin:2px 0 0;color:#666">${addr.street}${addr.city ? ', ' + addr.city : ''}</p>
-            ${addr.phone ? `<p style="margin:2px 0 0;color:#666">📞 ${addr.phone}</p>` : ''}
-          </div>
-        </div>
-        
-        <!-- Footer -->
-        <div style="background:#2D5A27;padding:25px 30px;text-align:center">
-          <p style="color:rgba(255,255,255,0.8);margin:0;font-size:13px">Need help? Contact us at <a href="mailto:${process.env.EMAIL_USER}" style="color:#C8A951">${process.env.EMAIL_USER}</a></p>
-          <p style="color:rgba(255,255,255,0.5);margin:8px 0 0;font-size:12px">© ${new Date().getFullYear()} Arab Fertilizers & Agro Chemicals</p>
-        </div>
+  const html = emailWrapper(`
+    <div style="background:linear-gradient(135deg,#2D5A27,#5D4037);padding:40px 30px;text-align:center">
+      <h1 style="color:#C8A951;margin:0;font-size:28px;letter-spacing:1px">🌿 Arab Fertilizer</h1>
+      <p style="color:rgba(255,255,255,0.85);margin:8px 0 0;font-size:14px">Fertilizers &amp; Agro Chemicals</p>
+    </div>
+    <div style="padding:35px 30px">
+      <h2 style="color:#2D5A27;margin:0 0 8px">Order Confirmed! ✅</h2>
+      <p style="color:#666;margin:0 0 25px">Dear <strong>${userName}</strong>, your order has been successfully placed.</p>
+      <div style="background:#f9f9f9;border-radius:8px;padding:16px 20px;margin-bottom:25px;border-left:4px solid #2D5A27">
+        <p style="margin:0;font-size:13px;color:#888">Order ID</p>
+        <p style="margin:4px 0 0;font-size:18px;font-weight:700;color:#333;letter-spacing:1px">#${orderId}</p>
       </div>
-    </body>
-    </html>
-  `;
+      <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
+        <thead>
+          <tr style="background:#2D5A27">
+            <th style="padding:12px;text-align:left;color:#fff">Product</th>
+            <th style="padding:12px;text-align:center;color:#fff">Qty</th>
+            <th style="padding:12px;text-align:right;color:#fff">Amount</th>
+          </tr>
+        </thead>
+        <tbody>${itemsHtml}</tbody>
+        <tfoot>${pricingRows}</tfoot>
+      </table>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:25px">
+        <tr>
+          <td style="width:50%;padding:0 8px 0 0;vertical-align:top">
+            <div style="background:#f9f9f9;border-radius:8px;padding:15px">
+              <p style="margin:0;font-size:12px;color:#888;text-transform:uppercase">Payment</p>
+              <p style="margin:5px 0 0;font-weight:600;color:#333">${order.paymentMethod === 'cod' ? '💵 Cash on Delivery' : '🏦 Bank Transfer'}</p>
+            </div>
+          </td>
+          <td style="width:50%;padding:0 0 0 8px;vertical-align:top">
+            <div style="background:#f9f9f9;border-radius:8px;padding:15px">
+              <p style="margin:0;font-size:12px;color:#888;text-transform:uppercase">Est. Delivery</p>
+              <p style="margin:5px 0 0;font-weight:600;color:#333">3–5 Business Days</p>
+            </div>
+          </td>
+        </tr>
+      </table>
+      <div style="background:#f9f9f9;border-radius:8px;padding:15px;margin-bottom:25px">
+        <p style="margin:0;font-size:12px;color:#888;text-transform:uppercase">Delivery Address</p>
+        <p style="margin:5px 0 0;font-weight:600;color:#333">${addr.name}</p>
+        <p style="margin:2px 0 0;color:#666">${addr.street}${addr.city ? ', ' + addr.city : ''}</p>
+        ${addr.phone ? `<p style="margin:2px 0 0;color:#666">📞 ${addr.phone}</p>` : ''}
+      </div>
+    </div>
+    <div style="background:#2D5A27;padding:25px 30px;text-align:center">
+      <p style="color:rgba(255,255,255,0.8);margin:0;font-size:13px">Questions? Email us at <a href="mailto:${process.env.EMAIL_USER || process.env.ADMIN_EMAIL}" style="color:#C8A951">${process.env.EMAIL_USER || process.env.ADMIN_EMAIL}</a></p>
+      <p style="color:rgba(255,255,255,0.5);margin:8px 0 0;font-size:12px">© ${new Date().getFullYear()} Arab Fertilizers &amp; Agro Chemicals</p>
+    </div>`);
 
-  const info = await transporter.sendMail({
+  const info = await sendViaResend({
     from: getSenderAddress(),
     to: email,
-    subject: `✅ Your Arab Fertilizer Order is Confirmed! — #${orderId}`,
+    subject: `✅ Order Confirmed — #${orderId} | Arab Fertilizer`,
     html,
   });
 
-  console.log(`[mailer] ✅ Order confirmation sent to ${email} (messageId: ${info.messageId})`);
+  console.log(`[mailer] ✅ Order confirmation sent to ${email} (id: ${info.messageId})`);
   return info;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// sendAdminOrderNotification — sends order alert to admin
+// sendAdminOrderNotification — new order alert to admin
 // ─────────────────────────────────────────────────────────────────────────────
 const sendAdminOrderNotification = async (order, userName) => {
   const adminEmail = process.env.ADMIN_EMAIL;
@@ -274,89 +313,68 @@ const sendAdminOrderNotification = async (order, userName) => {
     return;
   }
 
-  const transporter = getTransporter();
   const { itemsHtml, pricingRows } = buildOrderTableHtml(order);
   const addr = safeAddress(order);
   const orderId = idToString(order._id).substring(0, 12).toUpperCase();
 
-  const html = `
-    <!DOCTYPE html>
-    <html>
-    <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
-    <body style="margin:0;padding:0;background:#f5f5f5;font-family:'Segoe UI',Arial,sans-serif">
-      <div style="max-width:600px;margin:30px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.08)">
-        <!-- Header -->
-        <div style="background:linear-gradient(135deg,#5D4037,#2D5A27);padding:40px 30px;text-align:center">
-          <h1 style="color:#C8A951;margin:0;font-size:28px;letter-spacing:1px">New Order Alert 🔔</h1>
-          <p style="color:rgba(255,255,255,0.85);margin:8px 0 0;font-size:14px">A new order has been placed on Arab Fertilizer</p>
-        </div>
-        
-        <!-- Body -->
-        <div style="padding:35px 30px">
-          <h2 style="color:#2D5A27;margin:0 0 8px">Action Required</h2>
-          <p style="color:#666;margin:0 0 25px">Customer <strong>${userName}</strong> just placed a new order.</p>
-          
-          <div style="background:#f9f9f9;border-radius:8px;padding:16px 20px;margin-bottom:25px;border-left:4px solid #C8A951">
-            <p style="margin:0;font-size:13px;color:#888">Order ID</p>
-            <p style="margin:4px 0 0;font-size:18px;font-weight:700;color:#333;letter-spacing:1px">#${orderId}</p>
-          </div>
-          
-          <!-- Items -->
-          <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
-            <thead>
-              <tr style="background:#2D5A27">
-                <th style="padding:12px;text-align:left;color:#fff">Product</th>
-                <th style="padding:12px;text-align:center;color:#fff">Qty</th>
-                <th style="padding:12px;text-align:right;color:#fff">Amount</th>
-              </tr>
-            </thead>
-            <tbody>${itemsHtml}</tbody>
-            <tfoot>${pricingRows}</tfoot>
-          </table>
-          
-          <!-- Details -->
-          <table style="width:100%;border-collapse:collapse;margin-bottom:25px">
-            <tr>
-              <td style="width:50%;padding:0 8px 0 0;vertical-align:top">
-                <div style="background:#f9f9f9;border-radius:8px;padding:15px">
-                  <p style="margin:0;font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px">Payment Method</p>
-                  <p style="margin:5px 0 0;font-weight:600;color:#333">${order.paymentMethod === 'cod' ? '💵 Cash on Delivery' : '🏦 Bank Transfer'}</p>
-                </div>
-              </td>
-              <td style="width:50%;padding:0 0 0 8px;vertical-align:top">
-                <div style="background:#f9f9f9;border-radius:8px;padding:15px">
-                  <p style="margin:0;font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px">Customer Name</p>
-                  <p style="margin:5px 0 0;font-weight:600;color:#333">${userName}</p>
-                </div>
-              </td>
-            </tr>
-          </table>
-          
-          <div style="background:#f9f9f9;border-radius:8px;padding:15px;margin-bottom:25px">
-            <p style="margin:0;font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px">Delivery Address</p>
-            <p style="margin:5px 0 0;font-weight:600;color:#333">${addr.name}</p>
-            <p style="margin:2px 0 0;color:#666">${addr.street}${addr.city ? ', ' + addr.city : ''}</p>
-            ${addr.phone ? `<p style="margin:2px 0 0;color:#666">📞 ${addr.phone}</p>` : ''}
-          </div>
-        </div>
-        
-        <!-- Footer -->
-        <div style="background:#2D5A27;padding:25px 30px;text-align:center">
-          <p style="color:rgba(255,255,255,0.8);margin:0;font-size:13px">Please log in to the admin panel to manage this order.</p>
-        </div>
+  const html = emailWrapper(`
+    <div style="background:linear-gradient(135deg,#5D4037,#2D5A27);padding:40px 30px;text-align:center">
+      <h1 style="color:#C8A951;margin:0;font-size:28px;letter-spacing:1px">New Order Alert 🔔</h1>
+      <p style="color:rgba(255,255,255,0.85);margin:8px 0 0;font-size:14px">A new order has been placed on Arab Fertilizer</p>
+    </div>
+    <div style="padding:35px 30px">
+      <h2 style="color:#2D5A27;margin:0 0 8px">Action Required</h2>
+      <p style="color:#666;margin:0 0 25px">Customer <strong>${userName}</strong> just placed a new order.</p>
+      <div style="background:#f9f9f9;border-radius:8px;padding:16px 20px;margin-bottom:25px;border-left:4px solid #C8A951">
+        <p style="margin:0;font-size:13px;color:#888">Order ID</p>
+        <p style="margin:4px 0 0;font-size:18px;font-weight:700;color:#333;letter-spacing:1px">#${orderId}</p>
       </div>
-    </body>
-    </html>
-  `;
+      <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
+        <thead>
+          <tr style="background:#2D5A27">
+            <th style="padding:12px;text-align:left;color:#fff">Product</th>
+            <th style="padding:12px;text-align:center;color:#fff">Qty</th>
+            <th style="padding:12px;text-align:right;color:#fff">Amount</th>
+          </tr>
+        </thead>
+        <tbody>${itemsHtml}</tbody>
+        <tfoot>${pricingRows}</tfoot>
+      </table>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:25px">
+        <tr>
+          <td style="width:50%;padding:0 8px 0 0;vertical-align:top">
+            <div style="background:#f9f9f9;border-radius:8px;padding:15px">
+              <p style="margin:0;font-size:12px;color:#888;text-transform:uppercase">Payment</p>
+              <p style="margin:5px 0 0;font-weight:600;color:#333">${order.paymentMethod === 'cod' ? '💵 Cash on Delivery' : '🏦 Bank Transfer'}</p>
+            </div>
+          </td>
+          <td style="width:50%;padding:0 0 0 8px;vertical-align:top">
+            <div style="background:#f9f9f9;border-radius:8px;padding:15px">
+              <p style="margin:0;font-size:12px;color:#888;text-transform:uppercase">Customer</p>
+              <p style="margin:5px 0 0;font-weight:600;color:#333">${userName}</p>
+            </div>
+          </td>
+        </tr>
+      </table>
+      <div style="background:#f9f9f9;border-radius:8px;padding:15px">
+        <p style="margin:0;font-size:12px;color:#888;text-transform:uppercase">Delivery Address</p>
+        <p style="margin:5px 0 0;font-weight:600;color:#333">${addr.name}</p>
+        <p style="margin:2px 0 0;color:#666">${addr.street}${addr.city ? ', ' + addr.city : ''}</p>
+        ${addr.phone ? `<p style="margin:2px 0 0;color:#666">📞 ${addr.phone}</p>` : ''}
+      </div>
+    </div>
+    <div style="background:#2D5A27;padding:25px 30px;text-align:center">
+      <p style="color:rgba(255,255,255,0.8);margin:0;font-size:13px">Log in to the admin panel to manage this order.</p>
+    </div>`);
 
-  const info = await transporter.sendMail({
+  const info = await sendViaResend({
     from: getSenderAddress(),
     to: adminEmail,
-    subject: `🚨 New Order Alert! — #${orderId} by ${userName}`,
+    subject: `🚨 New Order #${orderId} by ${userName} | Arab Fertilizer`,
     html,
   });
 
-  console.log(`[mailer] ✅ Admin order notification sent to ${adminEmail} (messageId: ${info.messageId})`);
+  console.log(`[mailer] ✅ Admin order notification sent to ${adminEmail} (id: ${info.messageId})`);
   return info;
 };
 
@@ -366,49 +384,31 @@ const sendAdminOrderNotification = async (order, userName) => {
 const sendPasswordResetOTP = async (email, userName, otp) => {
   if (!email) throw new Error('[mailer] sendPasswordResetOTP: email is required');
 
-  const transporter = getTransporter();
-
-  const html = `
-    <!DOCTYPE html>
-    <html>
-    <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
-    <body style="margin:0;padding:0;background:#f5f5f5;font-family:'Segoe UI',Arial,sans-serif">
-      <div style="max-width:600px;margin:30px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.08)">
-        <!-- Header -->
-        <div style="background:linear-gradient(135deg,#2D5A27,#5D4037);padding:40px 30px;text-align:center">
-          <h1 style="color:#C8A951;margin:0;font-size:28px;letter-spacing:1px">Password Reset</h1>
-          <p style="color:rgba(255,255,255,0.85);margin:8px 0 0;font-size:14px">Arab Fertilizer</p>
-        </div>
-        
-        <!-- Body -->
-        <div style="padding:35px 30px">
-          <h2 style="color:#2D5A27;margin:0 0 8px">Hello ${userName},</h2>
-          <p style="color:#666;margin:0 0 25px;line-height:1.6">We received a request to reset your password. Use the following 6-digit code to complete the process. This code will expire in <strong>10 minutes</strong>.</p>
-          
-          <div style="background:#f0f8ee;border-radius:8px;padding:25px;margin-bottom:25px;text-align:center;border:2px dashed #2D5A27">
-            <div style="font-size:36px;font-weight:800;color:#2D5A27;letter-spacing:8px;font-family:monospace">${otp}</div>
-          </div>
-          
-          <p style="color:#888;margin:0 0 10px;font-size:13px;line-height:1.5">If you didn't request a password reset, you can safely ignore this email. Your password will not change.</p>
-        </div>
-        
-        <!-- Footer -->
-        <div style="background:#f9f9f9;padding:20px 30px;text-align:center;border-top:1px solid #eee">
-          <p style="color:#999;margin:0;font-size:12px">© ${new Date().getFullYear()} Arab Fertilizers & Agro Chemicals</p>
-        </div>
+  const html = emailWrapper(`
+    <div style="background:linear-gradient(135deg,#2D5A27,#5D4037);padding:40px 30px;text-align:center">
+      <h1 style="color:#C8A951;margin:0;font-size:28px;letter-spacing:1px">Password Reset 🔐</h1>
+      <p style="color:rgba(255,255,255,0.85);margin:8px 0 0;font-size:14px">Arab Fertilizer</p>
+    </div>
+    <div style="padding:35px 30px">
+      <h2 style="color:#2D5A27;margin:0 0 8px">Hello ${userName},</h2>
+      <p style="color:#666;margin:0 0 25px;line-height:1.6">We received a request to reset your password. Use the code below — it expires in <strong>10 minutes</strong>.</p>
+      <div style="background:#f0f8ee;border-radius:8px;padding:30px;margin-bottom:25px;text-align:center;border:2px dashed #2D5A27">
+        <div style="font-size:40px;font-weight:800;color:#2D5A27;letter-spacing:10px;font-family:monospace">${otp}</div>
       </div>
-    </body>
-    </html>
-  `;
+      <p style="color:#888;font-size:13px;line-height:1.5">If you didn't request this, you can safely ignore this email.</p>
+    </div>
+    <div style="background:#f9f9f9;padding:20px 30px;text-align:center;border-top:1px solid #eee">
+      <p style="color:#999;margin:0;font-size:12px">© ${new Date().getFullYear()} Arab Fertilizers &amp; Agro Chemicals</p>
+    </div>`);
 
-  const info = await transporter.sendMail({
+  const info = await sendViaResend({
     from: getSenderAddress(),
     to: email,
-    subject: `🔐 Your Password Reset Code: ${otp}`,
+    subject: `🔐 Your Password Reset Code: ${otp} | Arab Fertilizer`,
     html,
   });
 
-  console.log(`[mailer] ✅ Password reset OTP sent to ${email} (messageId: ${info.messageId})`);
+  console.log(`[mailer] ✅ Password reset OTP sent to ${email} (id: ${info.messageId})`);
   return info;
 };
 
@@ -422,34 +422,31 @@ const sendContactEmail = async (formData) => {
     return;
   }
 
-  const transporter = getTransporter();
+  const html = emailWrapper(`
+    <div style="background:linear-gradient(135deg,#2D5A27,#5D4037);padding:30px;text-align:center">
+      <h1 style="color:#C8A951;margin:0;font-size:24px">New Contact Inquiry 📩</h1>
+    </div>
+    <div style="padding:30px">
+      <table style="width:100%;border-collapse:collapse">
+        <tr><td style="padding:8px 0;font-weight:600;color:#555;width:100px">From:</td><td style="padding:8px 0;color:#333">${formData.name} (${formData.email})</td></tr>
+        <tr><td style="padding:8px 0;font-weight:600;color:#555">Phone:</td><td style="padding:8px 0;color:#333">${formData.phone || 'N/A'}</td></tr>
+        <tr><td style="padding:8px 0;font-weight:600;color:#555">Subject:</td><td style="padding:8px 0;color:#333">${formData.subject}</td></tr>
+      </table>
+      <div style="background:#f5f5f5;padding:20px;border-radius:8px;margin-top:20px;white-space:pre-wrap;color:#333;line-height:1.6">${formData.message}</div>
+    </div>
+    <div style="background:#f9f9f9;padding:15px 30px;border-top:1px solid #eee;text-align:center">
+      <p style="color:#999;margin:0;font-size:12px">Sent from Arab Fertilizer Contact Form</p>
+    </div>`);
 
-  const html = `
-    <!DOCTYPE html>
-    <html>
-    <head><meta charset="UTF-8"></head>
-    <body style="font-family:sans-serif;line-height:1.6;color:#333;background:#f9f9f9;padding:20px">
-      <div style="max-width:600px;margin:0 auto;background:#fff;border-radius:10px;padding:30px;box-shadow:0 2px 10px rgba(0,0,0,0.05)">
-        <h2 style="color:#2D5A27;border-bottom:2px solid #2D5A27;padding-bottom:10px">New Contact Inquiry 📩</h2>
-        <p><strong>From:</strong> ${formData.name} (${formData.email})</p>
-        <p><strong>Phone:</strong> ${formData.phone || 'N/A'}</p>
-        <p><strong>Subject:</strong> ${formData.subject}</p>
-        <div style="background:#f5f5f5;padding:20px;border-radius:8px;margin-top:20px;white-space:pre-wrap">${formData.message}</div>
-        <p style="font-size:12px;color:#888;margin-top:30px">Sent from Arab Fertilizer Contact Us form.</p>
-      </div>
-    </body>
-    </html>
-  `;
-
-  const info = await transporter.sendMail({
+  const info = await sendViaResend({
     from: getSenderAddress(),
     to: adminEmail,
-    replyTo: formData.email, // Admin can reply directly to the visitor
-    subject: `📩 Contact Form: ${formData.subject}`,
+    replyTo: formData.email,
+    subject: `📩 Contact: ${formData.subject} — from ${formData.name}`,
     html,
   });
 
-  console.log(`[mailer] ✅ Contact form email sent to ${adminEmail} (messageId: ${info.messageId})`);
+  console.log(`[mailer] ✅ Contact form email sent to ${adminEmail} (id: ${info.messageId})`);
   return info;
 };
 
