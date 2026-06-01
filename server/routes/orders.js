@@ -10,32 +10,43 @@ const { sendOrderConfirmation } = require("../utils/mailer");
 // ─────────────────────────────────────────
 router.post("/", protect, async (req, res) => {
   try {
-    const { items, shippingAddress, paymentMethod, totalAmount } = req.body;
+    const { items, shippingAddress, paymentMethod, paymentDetails, couponCode } = req.body;
 
     if (!items || items.length === 0) {
       return res.status(400).json({ message: "No order items provided." });
     }
 
+    // Calculate totalAmount on the SERVER — never trust the client for this
+    const totalAmount = items.reduce((sum, item) => {
+      const price = Number(item.price) || 0;
+      const qty   = Number(item.quantity) || 1;
+      return sum + price * qty;
+    }, 0);
+
+    const shipping = totalAmount >= 5000 ? 0 : 200;
+    const grandTotal = totalAmount + shipping;
+
     const order = await Order.create({
       user: req.user._id,
-      items,
+      items,                 // items now include name + price from the fixed frontend
       shippingAddress,
       paymentMethod,
-      totalAmount,
+      paymentDetails: paymentDetails || null,
+      couponCode: couponCode || '',
+      totalAmount: grandTotal,
       status: "pending",
     });
 
-    // ── Send confirmation email to the CUSTOMER who placed the order ──
-    const customerEmail = req.user.email; // pulled from JWT-verified user
+    // ── Send confirmation email to the CUSTOMER ──
+    const customerEmail = req.user.email;
     if (customerEmail) {
       try {
         await sendOrderConfirmation(customerEmail, order);
       } catch (mailErr) {
-        // Email failure should NOT block the order response
         console.error("Email send failed (non-fatal):", mailErr.message);
       }
     } else {
-      console.warn("No customer email found — skipping confirmation email.");
+      console.warn("No customer email on req.user — skipping confirmation email.");
     }
 
     res.status(201).json({ success: true, order });
@@ -43,6 +54,15 @@ router.post("/", protect, async (req, res) => {
     console.error("Order creation error:", err);
     res.status(500).json({ message: "Server error placing order.", error: err.message });
   }
+});
+
+// ─────────────────────────────────────────
+// POST /api/orders/validate-coupon
+// ─────────────────────────────────────────
+router.post("/validate-coupon", protect, async (req, res) => {
+  // Stub — replace with your real coupon logic if you have a Coupon model
+  const { code } = req.body;
+  return res.status(404).json({ success: false, message: "Invalid coupon code" });
 });
 
 // ─────────────────────────────────────────
@@ -58,26 +78,6 @@ router.get("/my", protect, async (req, res) => {
 });
 
 // ─────────────────────────────────────────
-// GET /api/orders/:id  —  Single order detail
-// ─────────────────────────────────────────
-router.get("/:id", protect, async (req, res) => {
-  try {
-    const order = await Order.findById(req.params.id).populate("user", "name email");
-    if (!order) return res.status(404).json({ message: "Order not found." });
-
-    // Allow access to the order owner OR admin
-    const isOwner = order.user._id.toString() === req.user._id.toString();
-    if (!isOwner && req.user.role !== "admin") {
-      return res.status(403).json({ message: "Not authorised to view this order." });
-    }
-
-    res.json(order);
-  } catch (err) {
-    res.status(500).json({ message: "Server error.", error: err.message });
-  }
-});
-
-// ─────────────────────────────────────────
 // GET /api/orders  —  Admin: all orders
 // ─────────────────────────────────────────
 router.get("/", protect, isAdmin, async (req, res) => {
@@ -86,6 +86,25 @@ router.get("/", protect, isAdmin, async (req, res) => {
       .populate("user", "name email")
       .sort({ createdAt: -1 });
     res.json(orders);
+  } catch (err) {
+    res.status(500).json({ message: "Server error.", error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────
+// GET /api/orders/:id  —  Single order detail
+// ─────────────────────────────────────────
+router.get("/:id", protect, async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id).populate("user", "name email");
+    if (!order) return res.status(404).json({ message: "Order not found." });
+
+    const isOwner = order.user._id.toString() === req.user._id.toString();
+    if (!isOwner && req.user.role !== "admin") {
+      return res.status(403).json({ message: "Not authorised to view this order." });
+    }
+
+    res.json(order);
   } catch (err) {
     res.status(500).json({ message: "Server error.", error: err.message });
   }

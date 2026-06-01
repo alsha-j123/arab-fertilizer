@@ -20,15 +20,11 @@ const Checkout = () => {
     city: '',
     province: '',
     postalCode: '',
-    // Bank payment details
     bankName: '',
     accountName: '',
     transactionId: ''
   });
 
-  // Bug fix #10: Keep email and name in sync when the user object changes
-  // (e.g. user logs out and back in during the same SPA session).
-  // useState initialises only once; useEffect reacts to subsequent changes.
   useEffect(() => {
     if (user) {
       setForm(prev => ({
@@ -39,7 +35,6 @@ const Checkout = () => {
     }
   }, [user]);
 
-  // Coupon state
   const [couponCodeInput, setCouponCodeInput] = useState('');
   const [appliedCoupon, setAppliedCoupon] = useState(null);
   const [couponError, setCouponError] = useState('');
@@ -85,7 +80,6 @@ const Checkout = () => {
     if (!user) { setShowAuthModal(true); return; }
     if (cartItems.length === 0) { setError('Your cart is empty'); return; }
 
-    // Email Validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(form.email)) {
       setError('Please enter a valid email address');
@@ -93,7 +87,6 @@ const Checkout = () => {
       return;
     }
 
-    // Bank Details Validation
     if (paymentMethod === 'bank') {
       if (!form.bankName || !form.accountName || !form.transactionId) {
         setError('Please fill in all bank transaction details');
@@ -102,30 +95,36 @@ const Checkout = () => {
       }
     }
 
-    setLoading(true); setError('');
+    setLoading(true);
+    setError('');
+
     try {
       const orderPayload = {
+        // ✅ FIX: name + price included so server can build email & calculate total
         items: cartItems.map(i => ({
-          product: i._id,
+          product:  i._id,
+          name:     i.name,
+          price:    i.discountPrice || i.price,
           quantity: i.quantity,
-          weight: i.weight || ''
+          weight:   i.weight || '',
+          imageUrl: i.imageUrl || i.images?.[0] || '',
         })),
         shippingAddress: {
-          name: form.name,
-          email: form.email,
-          phone: form.phone,
-          street: form.street,
-          city: form.city,
-          province: form.province,
-          postalCode: form.postalCode
+          fullName:   form.name,   // ← matches mailer.js key
+          email:      form.email,
+          phone:      form.phone,
+          address:    form.street, // ← matches mailer.js key
+          city:       form.city,
+          province:   form.province,
+          postalCode: form.postalCode,
         },
         paymentMethod,
         couponCode: appliedCoupon ? appliedCoupon.code : '',
         paymentDetails: paymentMethod === 'bank' ? {
-          bankName: form.bankName,
-          accountName: form.accountName,
-          transactionId: form.transactionId
-        } : null
+          bankName:      form.bankName,
+          accountName:   form.accountName,
+          transactionId: form.transactionId,
+        } : null,
       };
 
       const { data } = await apiClient.post('/orders', orderPayload);
@@ -176,13 +175,13 @@ const Checkout = () => {
                 </h2>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
                   {[
-                    { name: 'name', label: 'Full Name *', type: 'text', placeholder: 'Muhammad Ahmed', col: 2 },
-                    { name: 'email', label: 'Email Address *', type: 'email', placeholder: 'ahmed@example.com', col: 2 },
-                    { name: 'phone', label: 'Phone Number *', type: 'tel', placeholder: '03XX-XXXXXXX', col: 1 },
-                    { name: 'city', label: 'City *', type: 'text', placeholder: 'Lahore', col: 1 },
-                    { name: 'street', label: 'Street Address *', type: 'text', placeholder: 'House #, Street, Area', col: 2 },
-                    { name: 'province', label: 'Province', type: 'text', placeholder: 'Punjab', col: 1 },
-                    { name: 'postalCode', label: 'Postal Code', type: 'text', placeholder: '54000', col: 1 }
+                    { name: 'name',       label: 'Full Name *',       type: 'text',  placeholder: 'Muhammad Ahmed',         col: 2 },
+                    { name: 'email',      label: 'Email Address *',   type: 'email', placeholder: 'ahmed@example.com',      col: 2 },
+                    { name: 'phone',      label: 'Phone Number *',    type: 'tel',   placeholder: '03XX-XXXXXXX',           col: 1 },
+                    { name: 'city',       label: 'City *',            type: 'text',  placeholder: 'Lahore',                 col: 1 },
+                    { name: 'street',     label: 'Street Address *',  type: 'text',  placeholder: 'House #, Street, Area',  col: 2 },
+                    { name: 'province',   label: 'Province',          type: 'text',  placeholder: 'Punjab',                 col: 1 },
+                    { name: 'postalCode', label: 'Postal Code',       type: 'text',  placeholder: '54000',                  col: 1 }
                   ].map(field => (
                     <div key={field.name} style={{ gridColumn: `span ${field.col}` }}>
                       <label style={{ display: 'block', marginBottom: 6, fontWeight: 600, fontSize: '0.85rem', color: '#444' }}>{field.label}</label>
@@ -206,8 +205,8 @@ const Checkout = () => {
                 </h2>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                   {[
-                    { value: 'cod', icon: '💵', title: 'Cash on Delivery', desc: 'Pay when your order arrives at your doorstep' },
-                    { value: 'bank', icon: '🏦', title: 'Bank Transfer', desc: 'Transfer directly to our bank account' }
+                    { value: 'cod',  icon: '💵', title: 'Cash on Delivery', desc: 'Pay when your order arrives at your doorstep' },
+                    { value: 'bank', icon: '🏦', title: 'Bank Transfer',    desc: 'Transfer directly to our bank account' }
                   ].map(opt => (
                     <label key={opt.value} style={{
                       display: 'flex', alignItems: 'center', gap: 16, padding: '16px 20px',
@@ -239,7 +238,6 @@ const Checkout = () => {
                         <strong>IBAN:</strong> PK87ABPA0010053335850010
                       </div>
                     </div>
-                    
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                       <div style={{ gridColumn: 'span 2' }}>
                         <label style={{ display: 'block', marginBottom: 5, fontSize: '0.8rem', fontWeight: 600 }}>Your Bank Name *</label>
@@ -286,74 +284,30 @@ const Checkout = () => {
                 ))}
               </div>
 
-              {/* Promo Code Input */}
+              {/* Promo Code */}
               <div style={{ borderTop: '1px solid #eee', paddingTop: 16, marginBottom: 16 }}>
                 <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#555', marginBottom: 8 }}>Have a promo code?</label>
                 <div style={{ display: 'flex', gap: 8 }}>
-                  <input
-                    type="text"
-                    placeholder="Enter coupon code"
-                    value={couponCodeInput}
+                  <input type="text" placeholder="Enter coupon code" value={couponCodeInput}
                     onChange={(e) => setCouponCodeInput(e.target.value.toUpperCase())}
                     disabled={couponLoading || appliedCoupon}
-                    style={{
-                      flex: 1,
-                      padding: '8px 12px',
-                      border: '1.5px solid #e0e0e0',
-                      borderRadius: 8,
-                      fontSize: '0.85rem',
-                      outline: 'none',
-                      textTransform: 'uppercase'
-                    }}
-                  />
+                    style={{ flex: 1, padding: '8px 12px', border: '1.5px solid #e0e0e0', borderRadius: 8, fontSize: '0.85rem', outline: 'none', textTransform: 'uppercase' }} />
                   {appliedCoupon ? (
-                    <button
-                      type="button"
-                      onClick={handleRemoveCoupon}
-                      style={{
-                        padding: '8px 16px',
-                        background: '#e74c3c',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: 8,
-                        fontSize: '0.85rem',
-                        fontWeight: 600,
-                        cursor: 'pointer'
-                      }}
-                    >
+                    <button type="button" onClick={handleRemoveCoupon}
+                      style={{ padding: '8px 16px', background: '#e74c3c', color: 'white', border: 'none', borderRadius: 8, fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer' }}>
                       Remove
                     </button>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={handleApplyCoupon}
-                      disabled={couponLoading || !couponCodeInput}
-                      style={{
-                        padding: '8px 16px',
-                        background: '#2D5A27',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: 8,
-                        fontSize: '0.85rem',
-                        fontWeight: 600,
+                    <button type="button" onClick={handleApplyCoupon} disabled={couponLoading || !couponCodeInput}
+                      style={{ padding: '8px 16px', background: '#2D5A27', color: 'white', border: 'none', borderRadius: 8, fontSize: '0.85rem', fontWeight: 600,
                         cursor: (couponLoading || !couponCodeInput) ? 'not-allowed' : 'pointer',
-                        opacity: (couponLoading || !couponCodeInput) ? 0.6 : 1
-                      }}
-                    >
+                        opacity: (couponLoading || !couponCodeInput) ? 0.6 : 1 }}>
                       {couponLoading ? 'Applying...' : 'Apply'}
                     </button>
                   )}
                 </div>
-                {couponError && (
-                  <div style={{ color: '#c0392b', fontSize: '0.75rem', marginTop: 6, fontWeight: 500 }}>
-                    ⚠️ {couponError}
-                  </div>
-                )}
-                {appliedCoupon && (
-                  <div style={{ color: '#27ae60', fontSize: '0.75rem', marginTop: 6, fontWeight: 600 }}>
-                    🎉 Coupon "{appliedCoupon.code}" applied!
-                  </div>
-                )}
+                {couponError  && <div style={{ color: '#c0392b', fontSize: '0.75rem', marginTop: 6, fontWeight: 500 }}>⚠️ {couponError}</div>}
+                {appliedCoupon && <div style={{ color: '#27ae60', fontSize: '0.75rem', marginTop: 6, fontWeight: 600 }}>🎉 Coupon "{appliedCoupon.code}" applied!</div>}
               </div>
 
               <div style={{ borderTop: '1px solid #eee', paddingTop: 14 }}>
