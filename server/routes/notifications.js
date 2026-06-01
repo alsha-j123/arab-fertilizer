@@ -1,8 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const Notification = require('../models/Notification');
-const EmailJob = require('../models/EmailJob');
 const { protect } = require('../middleware/authMiddleware');
+const { queueAndSend } = require('../utils/emailWorker');
 
 /* POST /api/notifications/contact — public contact form */
 router.post('/contact', async (req, res) => {
@@ -13,24 +13,24 @@ router.post('/contact', async (req, res) => {
     }
 
     // 1. Create In-App Notification for Admin
-    await Notification.create({
+    Notification.create({
       type: 'system',
       message: `New contact message from ${name}`,
       data: { email, subject }
-    });
+    }).catch(err => console.error('[notifications] Failed to create notification:', err.message));
 
-    // 2. Queue Email to Admin
+    // 2. Send contact email immediately (with queue fallback for retries)
     const adminEmail = process.env.ADMIN_EMAIL;
     if (adminEmail) {
-      await EmailJob.create({
-        type: 'contact_form',
-        to: adminEmail,
-        data: { name, email, phone, subject, message }
-      });
+      queueAndSend('contact_form', adminEmail, { name, email, phone, subject, message })
+        .catch(err => console.error('[notifications] Failed to queue contact email:', err.message));
+    } else {
+      console.warn('[notifications] ADMIN_EMAIL not set — contact form email skipped');
     }
 
     res.json({ success: true, message: 'Message sent successfully' });
   } catch (err) {
+    console.error('[notifications] Contact form error:', err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -52,9 +52,9 @@ router.get('/', adminKey, async (req, res) => {
       .sort('-createdAt')
       .limit(Number(limit))
       .lean();
-    
+
     const unreadCount = await Notification.countDocuments({ read: false });
-    
+
     res.json({ success: true, notifications, unreadCount });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

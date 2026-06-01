@@ -17,7 +17,8 @@ app.use(compression({ level: 6, threshold: 1024 }));
 const allowedOrigins = [
   process.env.CLIENT_URL || 'http://localhost:3000',
   'https://arab-fertilizer.vercel.app',
-];
+  // Add any other Vercel preview URLs here if needed
+].filter(Boolean);
 app.use(cors({
   origin: (origin, cb) => {
     // allow requests with no origin (mobile apps, curl, Postman)
@@ -109,7 +110,7 @@ mongoose.connect(uri, {
 })
   .then(() => {
     console.log('✅ MongoDB Connected');
-    startEmailWorker();
+    startEmailWorker(); // async: verifies SMTP, starts polling worker
     app.listen(PORT, () => console.log(`🚀 Server on http://localhost:${PORT}`));
   })
   .catch(err => {

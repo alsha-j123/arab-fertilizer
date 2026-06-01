@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const User = require('../models/User');
 const Employee = require('../models/Employee');
 const EmailJob = require('../models/EmailJob');
+const { queueAndSend } = require('../utils/emailWorker');
 const { protect } = require('../middleware/authMiddleware');
 const { verifyEmailExistence } = require('../utils/emailVerifier');
 
@@ -393,11 +394,11 @@ router.post('/forgot-password', async (req, res) => {
     user.resetPasswordExpire = new Date(Date.now() + 10 * 60 * 1000);
     await user.save();
 
-    // Queue email
-    await EmailJob.create({
-      type: 'forgot_password_otp',
-      to: user.email,
-      data: { email: user.email, userName: user.name, otp }
+    // Send OTP email immediately (with queue fallback for retries)
+    await queueAndSend('forgot_password_otp', user.email, {
+      email: user.email,
+      userName: user.name,
+      otp
     });
 
     res.json({ success: true, message: 'OTP sent to your email' });

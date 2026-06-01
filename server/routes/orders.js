@@ -9,11 +9,11 @@ const EmailJob = require('../models/EmailJob');
 const Notification = require('../models/Notification');
 const Coupon   = require('../models/Coupon');
 const productsRouter = require('./products');
+const { queueAndSend } = require('../utils/emailWorker');
 
 
 const accessGuard = (req, res, next) => {
   const key = req.headers['x-admin-key'] || req.query.adminKey;
-  // Bug fix #4: No hardcoded fallback — ADMIN_SECRET must be set in environment
   if (process.env.ADMIN_SECRET && key === process.env.ADMIN_SECRET) return next();
 
   protect(req, res, () => {
@@ -25,7 +25,6 @@ const accessGuard = (req, res, next) => {
 
 const adminGuard = (req, res, next) => {
   const key = req.headers['x-admin-key'] || req.query.adminKey;
-  // Bug fix #4: No hardcoded fallback — ADMIN_SECRET must be set in environment
   if (process.env.ADMIN_SECRET && key === process.env.ADMIN_SECRET) return next();
 
   protect(req, res, () => {
@@ -92,7 +91,6 @@ router.post('/', protect, async (req, res) => {
       if (typeof productsRouter.clearProductCache === 'function') {
         productsRouter.clearProductCache();
       }
-
     }
 
     const shippingCost = subtotal >= 5000 ? 0 : 200;
@@ -118,8 +116,7 @@ router.post('/', protect, async (req, res) => {
         ? Math.round((subtotal * coupon.value) / 100)
         : Math.min(coupon.value, subtotal);
 
-      // Bug fix #6: Atomic increment to prevent race condition — two simultaneous
-      // requests can no longer both pass the usedCount check and double-apply the coupon.
+      // Atomic increment to prevent race condition on coupon usage
       const atomicResult = await Coupon.findOneAndUpdate(
         { _id: coupon._id, usedCount: { $lt: coupon.maxUses } },
         { $inc: { usedCount: 1 } },
@@ -148,32 +145,44 @@ router.post('/', protect, async (req, res) => {
       deliveryStatus: 'pending'
     });
 
-    /* Queue Customer Email */
-    await EmailJob.create({
-      type: 'customer_order_confirmation',
-      to: req.user.email,
-      data: { email: req.user.email, userName: req.user.name, order }
-    });
-    
-    /* Queue Admin Email */
+    // ── Send emails immediately via queueAndSend (queues + attempts instant delivery)
+    // We fire these without awaiting so the order response is returned to the
+    // customer instantly. Failures are retried automatically by the polling worker.
+    const customerEmail = req.user.email;
+    const customerName  = req.user.name;
+
+    // Customer confirmation email
+    queueAndSend('customer_order_confirmation', customerEmail, {
+      email: customerEmail,
+      userName: customerName,
+      order: order.toObject()
+    }).catch(err =>
+      console.error(`[orders] Failed to queue customer email for order ${order._id}: ${err.message}`)
+    );
+
+    // Admin notification email
     const adminEmail = process.env.ADMIN_EMAIL;
     if (adminEmail) {
-      await EmailJob.create({
-        type: 'admin_order_notification',
-        to: adminEmail,
-        data: { order, userName: req.user.name }
-      });
+      queueAndSend('admin_order_notification', adminEmail, {
+        order: order.toObject(),
+        userName: customerName
+      }).catch(err =>
+        console.error(`[orders] Failed to queue admin email for order ${order._id}: ${err.message}`)
+      );
     }
 
-    /* Create Admin In-App Notification */
-    await Notification.create({
+    // In-app notification for admin dashboard
+    Notification.create({
       type: 'new_order',
-      message: `New order placed by ${req.user.name}`,
+      message: `New order placed by ${customerName}`,
       data: { orderId: order._id }
-    });
+    }).catch(err =>
+      console.error(`[orders] Failed to create notification for order ${order._id}: ${err.message}`)
+    );
 
     res.status(201).json({ success: true, order });
   } catch (err) {
+    console.error(`[orders] POST /api/orders error: ${err.message}`);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -200,7 +209,6 @@ router.get('/', accessGuard, async (req, res) => {
     if (paymentStatus) query.paymentStatus = paymentStatus;
     if (pmFilter) query.paymentMethod = pmFilter;
 
-    // Employee specific filtering
     if (req.user?.role === 'employee') {
       const emp = await Employee.findOne({ email: req.user.email.toLowerCase().trim() });
       if (emp) {
@@ -214,16 +222,16 @@ router.get('/', accessGuard, async (req, res) => {
 
     const orders = await Order.find(query)
       .populate('user', 'name email phone')
-      .select('user totalAmount subtotal shippingCost discountAmount couponCode paymentMethod paymentStatus deliveryStatus createdAt paymentDetails shippingAddress orderNotes items') 
+      .select('user totalAmount subtotal shippingCost discountAmount couponCode paymentMethod paymentStatus deliveryStatus createdAt paymentDetails shippingAddress orderNotes items')
       .sort('-createdAt')
       .skip((Number(page) - 1) * Number(limit))
       .limit(Number(limit))
       .lean();
 
     const total = await Order.countDocuments(query);
-    res.json({ 
-      success: true, 
-      orders, 
+    res.json({
+      success: true,
+      orders,
       total,
       pages: Math.ceil(total / Number(limit)),
       currentPage: Number(page)
@@ -279,8 +287,7 @@ router.get('/:id', protect, async (req, res) => {
       .populate('items.product', 'name images category')
       .lean();
     if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
-    
-    // Authorization: Admin can see all, Employee can see their dealers' orders, User can see their own
+
     let isAuthorized = (req.user.role === 'admin');
     if (!isAuthorized && req.user.role === 'employee') {
       const emp = await Employee.findOne({ email: req.user.email.toLowerCase().trim() });
@@ -295,7 +302,7 @@ router.get('/:id', protect, async (req, res) => {
 
     if (!isAuthorized)
       return res.status(403).json({ success: false, message: 'Not authorized' });
-    
+
     res.json({ success: true, order });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -311,13 +318,10 @@ router.put('/:id/status', adminGuard, async (req, res) => {
     if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
 
     if (deliveryStatus === 'cancelled' && order.deliveryStatus !== 'cancelled') {
-      // Bug fix #5: Restore stock at the correct level — variant stock if the item
-      // used a variant, otherwise the root product stock.
       for (const item of order.items) {
         const product = await Product.findById(item.product);
         if (!product) continue;
 
-        // If the order item has a weight, try to restore variant stock
         let restoredVariant = false;
         if (item.weight && product.variants && product.variants.length > 0) {
           const variant = product.variants.find(v => v.weight === item.weight);
@@ -328,7 +332,6 @@ router.put('/:id/status', adminGuard, async (req, res) => {
           }
         }
 
-        // Fallback: restore root stock if no matching variant found
         if (!restoredVariant) {
           product.stock += item.quantity;
         }

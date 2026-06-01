@@ -1,38 +1,81 @@
 const nodemailer = require('nodemailer');
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SMTP transporter factory
+// SMTP transporter — created ONCE at module load, not per email call.
+// Creating a new transport per email wastes TCP connections and causes
+// "too many connections" errors on Gmail SMTP on high-traffic deployments.
+//
 // FIX: Gmail SMTP requires the "from" address to match the authenticated
-//      EMAIL_USER.  Using a custom domain (e.g. noreply@arabfertilizer.com)
-//      as the from address causes Gmail to reject the message with a 530/535
-//      error.  We now always derive the display "from" from EMAIL_USER so the
-//      SMTP AUTH and the envelope sender are the same account.
+//      EMAIL_USER.  Using a custom domain as the from address causes Gmail to
+//      reject the message with a 530/535 error.  We always derive the display
+//      "from" from EMAIL_USER so the SMTP AUTH and the envelope sender match.
 // ─────────────────────────────────────────────────────────────────────────────
-const createTransporter = () => {
+
+let _transporter = null;
+
+const getTransporter = () => {
+  if (_transporter) return _transporter;
+
   const user = process.env.EMAIL_USER;
+  // Strip ALL whitespace from the app password (copy-paste can add spaces)
   const pass = process.env.EMAIL_PASS ? process.env.EMAIL_PASS.replace(/\s/g, '') : '';
 
   if (!user || !pass) {
     throw new Error(
-      'Email configuration missing: EMAIL_USER and EMAIL_PASS must be set in .env'
+      '[mailer] Email configuration missing: EMAIL_USER and EMAIL_PASS must be set in environment variables.\n' +
+      '  EMAIL_USER should be your Gmail address (e.g. arabagro89@gmail.com)\n' +
+      '  EMAIL_PASS should be a 16-character Gmail App Password (NOT your regular password)\n' +
+      '  Generate one at: Google Account → Security → 2-Step Verification → App passwords'
     );
   }
 
-  return nodemailer.createTransport({
+  _transporter = nodemailer.createTransport({
     host: 'smtp.gmail.com',
     port: 465,
-    secure: true, // SSL
+    secure: true, // SSL — required for port 465
     auth: { user, pass },
-    // Increase timeout for slow SMTP handshakes (common on shared hosting)
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
-    socketTimeout: 15000,
+    connectionTimeout: 15000,  // 15s — Render cold starts can be slow
+    greetingTimeout: 15000,
+    socketTimeout: 20000,
+    // Pool connections to avoid creating a new TCP connection for each email
+    pool: true,
+    maxConnections: 3,
+    maxMessages: 100,
   });
+
+  return _transporter;
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// testConnection — call on server startup to detect bad credentials early
+// ─────────────────────────────────────────────────────────────────────────────
+const testConnection = async () => {
+  try {
+    const transport = getTransporter();
+    await transport.verify();
+    console.log(`[mailer] ✅ SMTP connection verified for ${process.env.EMAIL_USER}`);
+    return true;
+  } catch (err) {
+    console.error('[mailer] ❌ SMTP connection FAILED:', err.message);
+    if (err.responseCode === 535 || err.code === 'EAUTH') {
+      console.error(
+        '[mailer] ⚠️  Authentication failed. Common causes:\n' +
+        '  1. Using your regular Gmail password instead of an App Password\n' +
+        '  2. 2-Step Verification not enabled on the Gmail account\n' +
+        '  3. App Password was revoked or expired\n' +
+        '  Fix: Go to Google Account → Security → 2-Step Verification → App passwords → Create new'
+      );
+    }
+    // Don't throw — server should still start even if email is misconfigured
+    return false;
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // FIX: "from" must always be the Gmail account used for AUTH.
 // EMAIL_FROM can provide a display name: "Arab Fertilizer <you@gmail.com>"
 // but the address portion MUST equal EMAIL_USER.
+// ─────────────────────────────────────────────────────────────────────────────
 const getSenderAddress = () => {
   const user = process.env.EMAIL_USER;
   const fromEnv = process.env.EMAIL_FROM || '';
@@ -51,9 +94,6 @@ const formatCurrency = (amount) =>
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper: safely convert an _id (ObjectId, string, or plain object) to string.
-// FIX: When an order is stored as Mixed in EmailJob.data and re-read from
-//      MongoDB, _id may arrive as a plain string or a plain { $oid: '...' }
-//      object instead of a real ObjectId instance.
 // ─────────────────────────────────────────────────────────────────────────────
 const idToString = (id) => {
   if (!id) return 'UNKNOWN';
@@ -135,7 +175,9 @@ const buildOrderTableHtml = (order) => {
 // sendOrderConfirmation — sends branded HTML email to the customer
 // ─────────────────────────────────────────────────────────────────────────────
 const sendOrderConfirmation = async (email, userName, order) => {
-  const transporter = createTransporter();
+  if (!email) throw new Error('[mailer] sendOrderConfirmation: email is required');
+
+  const transporter = getTransporter();
   const { itemsHtml, pricingRows } = buildOrderTableHtml(order);
   const addr = safeAddress(order);
   const orderId = idToString(order._id).substring(0, 12).toUpperCase();
@@ -166,26 +208,32 @@ const sendOrderConfirmation = async (email, userName, order) => {
           <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
             <thead>
               <tr style="background:#2D5A27">
-                <th style="padding:12px;text-align:left;color:#fff;border-radius:8px 0 0 0">Product</th>
+                <th style="padding:12px;text-align:left;color:#fff">Product</th>
                 <th style="padding:12px;text-align:center;color:#fff">Qty</th>
-                <th style="padding:12px;text-align:right;color:#fff;border-radius:0 8px 0 0">Amount</th>
+                <th style="padding:12px;text-align:right;color:#fff">Amount</th>
               </tr>
             </thead>
             <tbody>${itemsHtml}</tbody>
             <tfoot>${pricingRows}</tfoot>
           </table>
           
-          <!-- Details Grid -->
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:15px;margin-bottom:25px">
-            <div style="background:#f9f9f9;border-radius:8px;padding:15px">
-              <p style="margin:0;font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px">Payment Method</p>
-              <p style="margin:5px 0 0;font-weight:600;color:#333">${order.paymentMethod === 'cod' ? '💵 Cash on Delivery' : '🏦 Bank Transfer'}</p>
-            </div>
-            <div style="background:#f9f9f9;border-radius:8px;padding:15px">
-              <p style="margin:0;font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px">Est. Delivery</p>
-              <p style="margin:5px 0 0;font-weight:600;color:#333">${order.estimatedDelivery ? new Date(order.estimatedDelivery).toLocaleDateString('en-PK', { weekday: 'long', month: 'long', day: 'numeric' }) : '3–5 Business Days'}</p>
-            </div>
-          </div>
+          <!-- Details -->
+          <table style="width:100%;border-collapse:collapse;margin-bottom:25px">
+            <tr>
+              <td style="width:50%;padding:0 8px 0 0;vertical-align:top">
+                <div style="background:#f9f9f9;border-radius:8px;padding:15px">
+                  <p style="margin:0;font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px">Payment Method</p>
+                  <p style="margin:5px 0 0;font-weight:600;color:#333">${order.paymentMethod === 'cod' ? '💵 Cash on Delivery' : '🏦 Bank Transfer'}</p>
+                </div>
+              </td>
+              <td style="width:50%;padding:0 0 0 8px;vertical-align:top">
+                <div style="background:#f9f9f9;border-radius:8px;padding:15px">
+                  <p style="margin:0;font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px">Est. Delivery</p>
+                  <p style="margin:5px 0 0;font-weight:600;color:#333">${order.estimatedDelivery ? new Date(order.estimatedDelivery).toLocaleDateString('en-PK', { weekday: 'long', month: 'long', day: 'numeric' }) : '3–5 Business Days'}</p>
+                </div>
+              </td>
+            </tr>
+          </table>
           
           <div style="background:#f9f9f9;border-radius:8px;padding:15px;margin-bottom:25px">
             <p style="margin:0;font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px">Delivery Address</p>
@@ -212,7 +260,7 @@ const sendOrderConfirmation = async (email, userName, order) => {
     html,
   });
 
-  console.log(`[mailer] Order confirmation sent to ${email} (messageId: ${info.messageId})`);
+  console.log(`[mailer] ✅ Order confirmation sent to ${email} (messageId: ${info.messageId})`);
   return info;
 };
 
@@ -226,7 +274,7 @@ const sendAdminOrderNotification = async (order, userName) => {
     return;
   }
 
-  const transporter = createTransporter();
+  const transporter = getTransporter();
   const { itemsHtml, pricingRows } = buildOrderTableHtml(order);
   const addr = safeAddress(order);
   const orderId = idToString(order._id).substring(0, 12).toUpperCase();
@@ -257,26 +305,32 @@ const sendAdminOrderNotification = async (order, userName) => {
           <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
             <thead>
               <tr style="background:#2D5A27">
-                <th style="padding:12px;text-align:left;color:#fff;border-radius:8px 0 0 0">Product</th>
+                <th style="padding:12px;text-align:left;color:#fff">Product</th>
                 <th style="padding:12px;text-align:center;color:#fff">Qty</th>
-                <th style="padding:12px;text-align:right;color:#fff;border-radius:0 8px 0 0">Amount</th>
+                <th style="padding:12px;text-align:right;color:#fff">Amount</th>
               </tr>
             </thead>
             <tbody>${itemsHtml}</tbody>
             <tfoot>${pricingRows}</tfoot>
           </table>
           
-          <!-- Details Grid -->
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:15px;margin-bottom:25px">
-            <div style="background:#f9f9f9;border-radius:8px;padding:15px">
-              <p style="margin:0;font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px">Payment Method</p>
-              <p style="margin:5px 0 0;font-weight:600;color:#333">${order.paymentMethod === 'cod' ? '💵 Cash on Delivery' : '🏦 Bank Transfer'}</p>
-            </div>
-            <div style="background:#f9f9f9;border-radius:8px;padding:15px">
-              <p style="margin:0;font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px">Customer Name</p>
-              <p style="margin:5px 0 0;font-weight:600;color:#333">${userName}</p>
-            </div>
-          </div>
+          <!-- Details -->
+          <table style="width:100%;border-collapse:collapse;margin-bottom:25px">
+            <tr>
+              <td style="width:50%;padding:0 8px 0 0;vertical-align:top">
+                <div style="background:#f9f9f9;border-radius:8px;padding:15px">
+                  <p style="margin:0;font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px">Payment Method</p>
+                  <p style="margin:5px 0 0;font-weight:600;color:#333">${order.paymentMethod === 'cod' ? '💵 Cash on Delivery' : '🏦 Bank Transfer'}</p>
+                </div>
+              </td>
+              <td style="width:50%;padding:0 0 0 8px;vertical-align:top">
+                <div style="background:#f9f9f9;border-radius:8px;padding:15px">
+                  <p style="margin:0;font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px">Customer Name</p>
+                  <p style="margin:5px 0 0;font-weight:600;color:#333">${userName}</p>
+                </div>
+              </td>
+            </tr>
+          </table>
           
           <div style="background:#f9f9f9;border-radius:8px;padding:15px;margin-bottom:25px">
             <p style="margin:0;font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px">Delivery Address</p>
@@ -302,7 +356,7 @@ const sendAdminOrderNotification = async (order, userName) => {
     html,
   });
 
-  console.log(`[mailer] Admin order notification sent to ${adminEmail} (messageId: ${info.messageId})`);
+  console.log(`[mailer] ✅ Admin order notification sent to ${adminEmail} (messageId: ${info.messageId})`);
   return info;
 };
 
@@ -310,7 +364,9 @@ const sendAdminOrderNotification = async (order, userName) => {
 // sendPasswordResetOTP
 // ─────────────────────────────────────────────────────────────────────────────
 const sendPasswordResetOTP = async (email, userName, otp) => {
-  const transporter = createTransporter();
+  if (!email) throw new Error('[mailer] sendPasswordResetOTP: email is required');
+
+  const transporter = getTransporter();
 
   const html = `
     <!DOCTYPE html>
@@ -327,7 +383,7 @@ const sendPasswordResetOTP = async (email, userName, otp) => {
         <!-- Body -->
         <div style="padding:35px 30px">
           <h2 style="color:#2D5A27;margin:0 0 8px">Hello ${userName},</h2>
-          <p style="color:#666;margin:0 0 25px;line-height:1.6">We received a request to reset your password. Use the following 6-digit code to complete the process. This code will expire in 10 minutes.</p>
+          <p style="color:#666;margin:0 0 25px;line-height:1.6">We received a request to reset your password. Use the following 6-digit code to complete the process. This code will expire in <strong>10 minutes</strong>.</p>
           
           <div style="background:#f0f8ee;border-radius:8px;padding:25px;margin-bottom:25px;text-align:center;border:2px dashed #2D5A27">
             <div style="font-size:36px;font-weight:800;color:#2D5A27;letter-spacing:8px;font-family:monospace">${otp}</div>
@@ -352,7 +408,7 @@ const sendPasswordResetOTP = async (email, userName, otp) => {
     html,
   });
 
-  console.log(`[mailer] Password reset OTP sent to ${email} (messageId: ${info.messageId})`);
+  console.log(`[mailer] ✅ Password reset OTP sent to ${email} (messageId: ${info.messageId})`);
   return info;
 };
 
@@ -366,7 +422,7 @@ const sendContactEmail = async (formData) => {
     return;
   }
 
-  const transporter = createTransporter();
+  const transporter = getTransporter();
 
   const html = `
     <!DOCTYPE html>
@@ -388,13 +444,12 @@ const sendContactEmail = async (formData) => {
   const info = await transporter.sendMail({
     from: getSenderAddress(),
     to: adminEmail,
-    // FIX: replyTo uses the visitor's email so admin can reply directly to them.
-    replyTo: formData.email,
+    replyTo: formData.email, // Admin can reply directly to the visitor
     subject: `📩 Contact Form: ${formData.subject}`,
     html,
   });
 
-  console.log(`[mailer] Contact form email sent to ${adminEmail} (messageId: ${info.messageId})`);
+  console.log(`[mailer] ✅ Contact form email sent to ${adminEmail} (messageId: ${info.messageId})`);
   return info;
 };
 
@@ -403,4 +458,5 @@ module.exports = {
   sendAdminOrderNotification,
   sendPasswordResetOTP,
   sendContactEmail,
+  testConnection,
 };
