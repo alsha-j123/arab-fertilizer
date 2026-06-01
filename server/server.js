@@ -123,4 +123,41 @@ mongoose.connect(uri, {
     process.exit(1);
   });
 
+  // TEMPORARY DEBUG — remove after fixing email
+app.get("/debug-email", async (req, res) => {
+  try {
+    const nodemailer = require("nodemailer");
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+      },
+    });
+
+    const info = await transporter.sendMail({
+      from: `"Arab Fertilizers" <${process.env.EMAIL_USER}>`,
+      to: "ayeshajavid310@gmail.com",
+      subject: "Debug Test",
+      html: "<p>Email is working!</p>",
+    });
+
+    res.json({
+      success: true,
+      messageId: info.messageId,
+      EMAIL_USER: process.env.EMAIL_USER,
+      EMAIL_PASS_SET: !!process.env.EMAIL_PASS,
+      EMAIL_PASS_LENGTH: (process.env.EMAIL_PASS || "").length,
+    });
+  } catch (err) {
+    res.json({
+      success: false,
+      error: err.message,
+      EMAIL_USER: process.env.EMAIL_USER,
+      EMAIL_PASS_SET: !!process.env.EMAIL_PASS,
+      EMAIL_PASS_LENGTH: (process.env.EMAIL_PASS || "").length,
+    });
+  }
+});
+
 module.exports = app;
