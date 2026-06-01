@@ -3,7 +3,7 @@ const router = express.Router();
 const Order = require("../models/Order");
 const { protect } = require("../middleware/authMiddleware");
 const { isAdmin } = require("../middleware/adminMiddleware");
-const { sendOrderConfirmation } = require("../utils/mailer");
+const { queueAndSend } = require("../utils/emailWorker");
 
 // ─────────────────────────────────────────
 // POST /api/orders  —  Place a new order
@@ -16,37 +16,48 @@ router.post("/", protect, async (req, res) => {
       return res.status(400).json({ message: "No order items provided." });
     }
 
-    // Calculate all amounts server-side
+    // Calculate amounts server-side — never trust the client
     const subtotal     = items.reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 1), 0);
     const shippingCost = subtotal >= 5000 ? 0 : 200;
     const totalAmount  = subtotal + shippingCost;
 
     const order = await Order.create({
-      user:            req.user._id,
+      user:           req.user._id,
       items,
-      shippingAddress,          // keys must match schema: name, street, phone, city
+      shippingAddress,   // keys: name, email, phone, street, city, province, postalCode
       paymentMethod,
       paymentDetails:  paymentDetails || null,
-      couponCode:      couponCode || '',
+      couponCode:      couponCode || "",
       subtotal,
       shippingCost,
       totalAmount,
-      status:          "pending",
     });
 
-    // Send confirmation email to the customer
+    // ── Queue confirmation email via emailWorker (has retry logic) ──
     const customerEmail = req.user.email;
+    const customerName  = req.user.name;
+
     if (customerEmail) {
-      try {
-        await sendOrderConfirmation(customerEmail, order);
-      } catch (mailErr) {
-        console.error("Email send failed (non-fatal):", mailErr.message);
-      }
+      // Customer confirmation
+      await queueAndSend(
+        "customer_order_confirmation",
+        customerEmail,
+        { email: customerEmail, userName: customerName, order: order.toObject() }
+      );
+
+      // Admin notification
+      await queueAndSend(
+        "admin_order_notification",
+        process.env.ADMIN_EMAIL || customerEmail,
+        { order: order.toObject(), userName: customerName }
+      );
+    } else {
+      console.warn("[orders] No customer email on req.user — skipping email.");
     }
 
     res.status(201).json({ success: true, order });
   } catch (err) {
-    console.error("Order creation error:", err.message);
+    console.error("[orders] Order creation error:", err.message);
     res.status(500).json({ message: err.message });
   }
 });
@@ -79,47 +90,6 @@ router.get("/", protect, isAdmin, async (req, res) => {
     res.json(orders);
   } catch (err) {
     res.status(500).json({ message: err.message });
-  }
-});
-
-// TEMPORARY DEBUG — no auth needed, remove after fixing
-router.get("/test-email-debug", async (req, res) => {
-  try {
-    console.log("EMAIL_USER set:", !!process.env.EMAIL_USER);
-    console.log("EMAIL_PASS set:", !!process.env.EMAIL_PASS);
-    console.log("EMAIL_USER value:", process.env.EMAIL_USER);
-
-    const nodemailer = require("nodemailer");
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      },
-    });
-
-    const info = await transporter.sendMail({
-      from: `"Arab Fertilizers" <${process.env.EMAIL_USER}>`,
-      to: "ayeshajavid310@gmail.com",
-      subject: "Test Email Debug",
-      html: "<p>If you see this, email is working!</p>",
-    });
-
-    res.json({ 
-      success: true, 
-      messageId: info.messageId,
-      EMAIL_USER: process.env.EMAIL_USER,
-      EMAIL_PASS_SET: !!process.env.EMAIL_PASS,
-      EMAIL_PASS_LENGTH: (process.env.EMAIL_PASS || "").length
-    });
-  } catch (err) {
-    res.json({ 
-      success: false, 
-      error: err.message,
-      EMAIL_USER: process.env.EMAIL_USER,
-      EMAIL_PASS_SET: !!process.env.EMAIL_PASS,
-      EMAIL_PASS_LENGTH: (process.env.EMAIL_PASS || "").length
-    });
   }
 });
 
