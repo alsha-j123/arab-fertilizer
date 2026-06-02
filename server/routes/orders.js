@@ -3,7 +3,7 @@ const router = express.Router();
 const Order = require("../models/Order");
 const { protect } = require("../middleware/authMiddleware");
 const { isAdmin } = require("../middleware/adminMiddleware");
-const { sendOrderConfirmation } = require("../utils/mailer");
+const { queueAndSend } = require("../utils/emailWorker");
 
 // ─────────────────────────────────────────
 // POST /api/orders  —  Place a new order
@@ -16,43 +16,49 @@ router.post("/", protect, async (req, res) => {
       return res.status(400).json({ message: "No order items provided." });
     }
 
-    // Calculate totalAmount on the SERVER — never trust the client for this
-    const totalAmount = items.reduce((sum, item) => {
-      const price = Number(item.price) || 0;
-      const qty   = Number(item.quantity) || 1;
-      return sum + price * qty;
-    }, 0);
-
-    const shipping = totalAmount >= 5000 ? 0 : 200;
-    const grandTotal = totalAmount + shipping;
+    // Calculate amounts server-side — never trust the client
+    const subtotal     = items.reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 1), 0);
+    const shippingCost = subtotal >= 5000 ? 0 : 200;
+    const totalAmount  = subtotal + shippingCost;
 
     const order = await Order.create({
-      user: req.user._id,
-      items,                 // items now include name + price from the fixed frontend
-      shippingAddress,
+      user:           req.user._id,
+      items,
+      shippingAddress,   // keys: name, email, phone, street, city, province, postalCode
       paymentMethod,
-      paymentDetails: paymentDetails || null,
-      couponCode: couponCode || '',
-      totalAmount: grandTotal,
-      status: "pending",
+      paymentDetails:  paymentDetails || null,
+      couponCode:      couponCode || "",
+      subtotal,
+      shippingCost,
+      totalAmount,
     });
 
-    // ── Send confirmation email to the CUSTOMER ──
+    // ── Queue confirmation email via emailWorker (has retry logic) ──
     const customerEmail = req.user.email;
+    const customerName  = req.user.name;
+
     if (customerEmail) {
-      try {
-        await sendOrderConfirmation(customerEmail, order);
-      } catch (mailErr) {
-        console.error("Email send failed (non-fatal):", mailErr.message);
-      }
+      // Customer confirmation
+      await queueAndSend(
+        "customer_order_confirmation",
+        customerEmail,
+        { email: customerEmail, userName: customerName, order: order.toObject() }
+      );
+
+      // Admin notification
+      await queueAndSend(
+        "admin_order_notification",
+        process.env.ADMIN_EMAIL || customerEmail,
+        { order: order.toObject(), userName: customerName }
+      );
     } else {
-      console.warn("No customer email on req.user — skipping confirmation email.");
+      console.warn("[orders] No customer email on req.user — skipping email.");
     }
 
     res.status(201).json({ success: true, order });
   } catch (err) {
-    console.error("Order creation error:", err);
-    res.status(500).json({ message: "Server error placing order.", error: err.message });
+    console.error("[orders] Order creation error:", err.message);
+    res.status(500).json({ message: err.message });
   }
 });
 
@@ -60,8 +66,6 @@ router.post("/", protect, async (req, res) => {
 // POST /api/orders/validate-coupon
 // ─────────────────────────────────────────
 router.post("/validate-coupon", protect, async (req, res) => {
-  // Stub — replace with your real coupon logic if you have a Coupon model
-  const { code } = req.body;
   return res.status(404).json({ success: false, message: "Invalid coupon code" });
 });
 
@@ -73,7 +77,7 @@ router.get("/my", protect, async (req, res) => {
     const orders = await Order.find({ user: req.user._id }).sort({ createdAt: -1 });
     res.json(orders);
   } catch (err) {
-    res.status(500).json({ message: "Server error fetching orders.", error: err.message });
+    res.status(500).json({ message: err.message });
   }
 });
 
@@ -82,17 +86,15 @@ router.get("/my", protect, async (req, res) => {
 // ─────────────────────────────────────────
 router.get("/", protect, isAdmin, async (req, res) => {
   try {
-    const orders = await Order.find()
-      .populate("user", "name email")
-      .sort({ createdAt: -1 });
+    const orders = await Order.find().populate("user", "name email").sort({ createdAt: -1 });
     res.json(orders);
   } catch (err) {
-    res.status(500).json({ message: "Server error.", error: err.message });
+    res.status(500).json({ message: err.message });
   }
 });
 
 // ─────────────────────────────────────────
-// GET /api/orders/:id  —  Single order detail
+// GET /api/orders/:id  —  Single order
 // ─────────────────────────────────────────
 router.get("/:id", protect, async (req, res) => {
   try {
@@ -101,43 +103,38 @@ router.get("/:id", protect, async (req, res) => {
 
     const isOwner = order.user._id.toString() === req.user._id.toString();
     if (!isOwner && req.user.role !== "admin") {
-      return res.status(403).json({ message: "Not authorised to view this order." });
+      return res.status(403).json({ message: "Not authorised." });
     }
-
     res.json(order);
   } catch (err) {
-    res.status(500).json({ message: "Server error.", error: err.message });
+    res.status(500).json({ message: err.message });
   }
 });
 
 // ─────────────────────────────────────────
-// PATCH /api/orders/:id/status  —  Admin: update status
+// PATCH /api/orders/:id/status  —  Admin
 // ─────────────────────────────────────────
 router.patch("/:id/status", protect, isAdmin, async (req, res) => {
   try {
     const { status } = req.body;
-    const validStatuses = ["pending", "confirmed", "shipped", "delivered", "cancelled"];
-
+    const validStatuses = ["pending", "processing", "shipped", "delivered", "cancelled"];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ message: "Invalid status value." });
     }
-
     const order = await Order.findByIdAndUpdate(
       req.params.id,
-      { status },
+      { deliveryStatus: status },
       { new: true }
     ).populate("user", "name email");
-
     if (!order) return res.status(404).json({ message: "Order not found." });
-
     res.json({ success: true, order });
   } catch (err) {
-    res.status(500).json({ message: "Server error.", error: err.message });
+    res.status(500).json({ message: err.message });
   }
 });
 
 // ─────────────────────────────────────────
-// DELETE /api/orders/:id  —  Admin: delete order
+// DELETE /api/orders/:id  —  Admin
 // ─────────────────────────────────────────
 router.delete("/:id", protect, isAdmin, async (req, res) => {
   try {
@@ -145,7 +142,7 @@ router.delete("/:id", protect, isAdmin, async (req, res) => {
     if (!order) return res.status(404).json({ message: "Order not found." });
     res.json({ success: true, message: "Order deleted." });
   } catch (err) {
-    res.status(500).json({ message: "Server error.", error: err.message });
+    res.status(500).json({ message: err.message });
   }
 });
 
