@@ -60,19 +60,19 @@ router.post("/", protect, async (req, res) => {
     const customerName  = req.user.name;
 
     if (customerEmail) {
-      // Customer confirmation
-      await queueAndSend(
+      // Customer confirmation (non-blocking)
+      queueAndSend(
         "customer_order_confirmation",
         customerEmail,
         { email: customerEmail, userName: customerName, order: order.toObject() }
-      );
+      ).catch(err => console.error("[orders] Email queue error:", err));
 
-      // Admin notification
-      await queueAndSend(
+      // Admin notification (non-blocking)
+      queueAndSend(
         "admin_order_notification",
         process.env.ADMIN_EMAIL || customerEmail,
         { order: order.toObject(), userName: customerName }
-      );
+      ).catch(err => console.error("[orders] Email queue error:", err));
     } else {
       console.warn("[orders] No customer email on req.user — skipping email.");
     }
