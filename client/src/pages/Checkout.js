@@ -149,7 +149,7 @@ const Checkout = () => {
           </div>
         )}
 
-        <form onSubmit={handleOrder}>
+        <form onSubmit={handleOrder} noValidate>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', gap: 28, alignItems: 'start' }}>
 
             {/* ── Left Column ── */}

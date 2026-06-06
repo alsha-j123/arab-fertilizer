@@ -89,6 +89,7 @@ const Navbar = () => {
 
   const handleSearch = e => {
     e.preventDefault();
+    e.stopPropagation();
     const trimmed = q.trim();
     if (trimmed) { navigate(`/search?q=${encodeURIComponent(trimmed)}`); setMobile(false); }
   };
