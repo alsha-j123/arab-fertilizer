@@ -394,12 +394,12 @@ router.post('/forgot-password', async (req, res) => {
     user.resetPasswordExpire = new Date(Date.now() + 10 * 60 * 1000);
     await user.save();
 
-    // Send OTP email immediately (with queue fallback for retries)
-    await queueAndSend('forgot_password_otp', user.email, {
+    // Send OTP email immediately (non-blocking)
+    queueAndSend('forgot_password_otp', user.email, {
       email: user.email,
       userName: user.name,
       otp
-    });
+    }).catch(err => console.error("[auth] OTP email queue error:", err));
 
     res.json({ success: true, message: 'OTP sent to your email' });
   } catch (err) {

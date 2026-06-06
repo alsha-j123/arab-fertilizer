@@ -1,16 +1,26 @@
 const nodemailer = require("nodemailer");
 
-// ─────────────────────────────────────────
-// Transporter (Gmail + App Password)
-// ─────────────────────────────────────────
-const createTransporter = () =>
-  nodemailer.createTransport({
-    service: "gmail",
+const createTransporter = () => {
+  const user = process.env.EMAIL_USER;
+  const pass = process.env.EMAIL_PASS;
+
+  if (!user || !pass) {
+    throw new Error("SMTP Credentials (EMAIL_USER or EMAIL_PASS) are missing from environment variables.");
+  }
+
+  return nodemailer.createTransport({
+    host: "smtp.gmail.com",
+    port: 465,
+    secure: true,
     auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
+      user: user,
+      pass: pass.replace(/\s+/g, ""),
     },
+    tls: {
+      rejectUnauthorized: false
+    }
   });
+};
 
 // ─────────────────────────────────────────
 // testConnection — called by emailWorker on startup
