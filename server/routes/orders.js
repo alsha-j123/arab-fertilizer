@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const Order = require("../models/Order");
+const Coupon = require("../models/Coupon");
 const { protect } = require("../middleware/authMiddleware");
 const { isAdmin } = require("../middleware/adminMiddleware");
 const { queueAndSend } = require("../utils/emailWorker");
@@ -19,15 +20,36 @@ router.post("/", protect, async (req, res) => {
     // Calculate amounts server-side — never trust the client
     const subtotal     = items.reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 1), 0);
     const shippingCost = subtotal >= 5000 ? 0 : 200;
-    const totalAmount  = subtotal + shippingCost;
+
+    let discountAmount = 0;
+    if (couponCode) {
+      const coupon = await Coupon.findOne({ code: couponCode.toUpperCase(), isActive: true });
+      if (coupon) {
+        const isExpired = coupon.expiresAt && new Date(coupon.expiresAt) < new Date();
+        const limitReached = coupon.usedCount >= coupon.maxUses;
+        const minOrderMet = subtotal >= coupon.minOrder;
+        if (!isExpired && !limitReached && minOrderMet) {
+          if (coupon.type === 'percent') {
+            discountAmount = Math.round((subtotal * coupon.value) / 100);
+          } else {
+            discountAmount = coupon.value;
+          }
+          coupon.usedCount += 1;
+          await coupon.save();
+        }
+      }
+    }
+
+    const totalAmount  = Math.max(0, subtotal + shippingCost - discountAmount);
 
     const order = await Order.create({
       user:           req.user._id,
       items,
       shippingAddress,   // keys: name, email, phone, street, city, province, postalCode
       paymentMethod,
-      paymentDetails:  paymentDetails || null,
+      paymentDetails:  paymentMethod === 'bank' ? (paymentDetails || {}) : null,
       couponCode:      couponCode || "",
+      discountAmount,
       subtotal,
       shippingCost,
       totalAmount,
@@ -57,7 +79,7 @@ router.post("/", protect, async (req, res) => {
 
     res.status(201).json({ success: true, order });
   } catch (err) {
-    console.error("[orders] Order creation error:", err.message);
+    console.error("[orders] Order creation error:", err);
     res.status(500).json({ message: err.message });
   }
 });
@@ -66,7 +88,28 @@ router.post("/", protect, async (req, res) => {
 // POST /api/orders/validate-coupon
 // ─────────────────────────────────────────
 router.post("/validate-coupon", protect, async (req, res) => {
-  return res.status(404).json({ success: false, message: "Invalid coupon code" });
+  try {
+    const { code, orderAmount } = req.body;
+    if (!code) {
+      return res.status(400).json({ success: false, message: "Coupon code is required" });
+    }
+    const coupon = await Coupon.findOne({ code: code.toUpperCase(), isActive: true });
+    if (!coupon) {
+      return res.status(404).json({ success: false, message: "Invalid coupon code" });
+    }
+    if (coupon.expiresAt && new Date(coupon.expiresAt) < new Date()) {
+      return res.status(400).json({ success: false, message: "Coupon has expired" });
+    }
+    if (coupon.usedCount >= coupon.maxUses) {
+      return res.status(400).json({ success: false, message: "Coupon usage limit reached" });
+    }
+    if (orderAmount < coupon.minOrder) {
+      return res.status(400).json({ success: false, message: `Minimum order amount of PKR ${coupon.minOrder} required` });
+    }
+    res.json({ success: true, coupon });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
 });
 
 // ─────────────────────────────────────────

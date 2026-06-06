@@ -115,6 +115,7 @@ const Checkout = () => {
       clearCart();
       navigate(`/order-success?orderId=${data.order._id}`);
     } catch (err) {
+      console.error("Order placement failed:", err);
       setError(err.response?.data?.message || 'Failed to place order. Please try again.');
       window.scrollTo(0, 0);
     } finally {
