@@ -15,4 +15,7 @@ const adminOnly = async (req, res, next) => {
   });
 };
 
-module.exports = { adminOnly };
+// isAdmin is an alias for adminOnly — used by orders.js and other routes
+const isAdmin = adminOnly;
+
+module.exports = { adminOnly, isAdmin };
