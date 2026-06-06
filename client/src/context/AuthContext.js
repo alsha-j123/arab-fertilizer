@@ -12,7 +12,9 @@ export const useAuth = () => {
 // withCredentials: true ensures the HTTP-only session cookie is sent/received
 // Use REACT_APP_API_URL for cross-origin deployments (e.g. Vercel + Render)
 const API = axios.create({
-  baseURL: `${process.env.REACT_APP_API_URL || ''}/api`,
+  baseURL: process.env.REACT_APP_API_URL
+    ? `${process.env.REACT_APP_API_URL}/api`
+    : 'https://arab-fertilizer-api.onrender.com/api',
   withCredentials: true,
 });
 
