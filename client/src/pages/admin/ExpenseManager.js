@@ -30,7 +30,7 @@ const ExpenseManager = () => {
   // Category management state
   const [newCat, setNewCat] = useState({ name: '', description: '', color: '#2D5A27' });
 
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
 
   const fetchCategories = async () => {
     try {
@@ -49,7 +49,10 @@ const ExpenseManager = () => {
     if (filterCat) params.category = filterCat;
     apiClient.get('/expenses', { params })
       .then(r => setExpenses(r.data.expenses || []))
-      .catch(() => setExpenses([]))
+      .catch(err => {
+        console.error('Failed to fetch expenses:', err?.response?.status, err?.response?.data?.message || err.message);
+        // Do NOT reset to [] on error — keep previous data so a transient failure doesn't blank the page
+      })
       .finally(() => setLoading(false));
   };
 
@@ -63,10 +66,14 @@ const ExpenseManager = () => {
   };
 
   useEffect(() => { 
+    // Wait for AuthContext to finish loading the user before making authenticated API calls.
+    // Without this guard, on page refresh the API calls fire before the token is ready,
+    // returning 401/403 which caused the blank page bug.
+    if (authLoading) return;
     fetchCategories();
     fetchExpenses(); 
     fetchEmployees();
-  }, [filterMonth, filterCat]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [filterMonth, filterCat, authLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const flash = msg => { setToast(msg); setTimeout(() => setToast(''), 2500); };
 
@@ -229,7 +236,7 @@ const ExpenseManager = () => {
 
       {/* List / Table */}
       <div style={{ background: 'white', borderRadius: 20, boxShadow: '0 10px 40px rgba(0,0,0,0.06)', overflow: 'hidden', border: '1px solid #f0f0f0' }}>
-        {loading ? (
+        {(loading || authLoading) ? (
           <div style={{ padding: 80, textAlign: 'center' }}>
             <div className="spin" style={{ width: 40, height: 40, border: '4px solid #f3f3f3', borderTop: '4px solid #2D5A27', borderRadius: '50%', margin: '0 auto 16px', animation: 'spin 1s linear infinite' }} />
             <p style={{ color: '#888' }}>Fetching expenses...</p>
