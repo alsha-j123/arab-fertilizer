@@ -51,7 +51,8 @@ const Dashboard = () => {
   const fetchOrders = async () => {
     try {
       const res = await apiClient.get('/orders');
-      const o = res.data.orders || [];
+      // Handle both { orders: [...] } and raw array response formats
+      const o = Array.isArray(res.data) ? res.data : (res.data.orders || []);
       setOrders(o);
       localStorage.setItem(ORDERS_KEY, JSON.stringify(o));
     } catch {

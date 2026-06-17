@@ -95,7 +95,7 @@ router.delete('/categories/:id', adminGuard, async (req, res) => {
 });
 
 /* ── POST /api/expenses — create ── */
-router.post('/', adminGuard, async (req, res) => {
+router.post('/', accessGuard, async (req, res) => {
   const { title, amount, category, date, notes, employee } = req.body;
   if (!title || !amount || !category) {
     return res.status(400).json({ success: false, message: 'Title, amount, and category ID are required' });
@@ -127,7 +127,7 @@ router.post('/', adminGuard, async (req, res) => {
 });
 
 /* ── PUT /api/expenses/:id — update ── */
-router.put('/:id', adminGuard, async (req, res) => {
+router.put('/:id', accessGuard, async (req, res) => {
   const existing = await Expense.findById(req.params.id);
   if (!existing) return res.status(404).json({ success: false, message: 'Expense not found' });
 
@@ -161,7 +161,7 @@ router.put('/:id', adminGuard, async (req, res) => {
 });
 
 /* ── DELETE /api/expenses/:id ── */
-router.delete('/:id', adminGuard, async (req, res) => {
+router.delete('/:id', accessGuard, async (req, res) => {
   const existing = await Expense.findById(req.params.id);
   if (!existing) return res.status(404).json({ success: false, message: 'Expense not found' });
 
