@@ -38,19 +38,25 @@ const rehydrateOrder = (rawOrder) => {
 // ─────────────────────────────────────────────────────────────────────────────
 const sendEmailNow = async (job) => {
   try {
+    console.log(`[emailWorker] Attempting to send ${job.type} email...`);
+
     if (job.type === 'customer_order_confirmation') {
       const { email, userName, order } = job.data;
+      console.log(`[emailWorker]   → sendOrderConfirmation to ${email}`);
       await sendOrderConfirmation(email, userName, rehydrateOrder(order));
 
     } else if (job.type === 'admin_order_notification') {
       const { order, userName } = job.data;
+      console.log(`[emailWorker]   → sendAdminOrderNotification to ${process.env.ADMIN_EMAIL || 'N/A'}`);
       await sendAdminOrderNotification(rehydrateOrder(order), userName);
 
     } else if (job.type === 'forgot_password_otp') {
       const { email, userName, otp } = job.data;
+      console.log(`[emailWorker]   → sendPasswordResetOTP to ${email}`);
       await sendPasswordResetOTP(email, userName, otp);
 
     } else if (job.type === 'contact_form') {
+      console.log(`[emailWorker]   → sendContactEmail`);
       await sendContactEmail(job.data);
 
     } else {
@@ -58,8 +64,13 @@ const sendEmailNow = async (job) => {
       return false;
     }
 
+    console.log(`[emailWorker] ✅ ${job.type} email sent successfully`);
     return true;
   } catch (err) {
+    console.error(`[emailWorker] ❌ Failed to send ${job.type} email:`, err.message);
+    if (err.code) console.error(`[emailWorker]   Error code: ${err.code}`);
+    if (err.responseCode) console.error(`[emailWorker]   SMTP response code: ${err.responseCode}`);
+    if (err.response) console.error(`[emailWorker]   SMTP response: ${err.response}`);
     return false;
   }
 };

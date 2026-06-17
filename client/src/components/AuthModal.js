@@ -137,6 +137,13 @@ const AuthModal = () => {
       const interval = setInterval(() => {
         if (window.google) {
           clearInterval(interval);
+          if (!process.env.REACT_APP_GOOGLE_CLIENT_ID) {
+            console.error(
+              "❌ REACT_APP_GOOGLE_CLIENT_ID is not defined! " +
+              "Google Sign-In will not function. Make sure to configure it in your Vercel/environment settings."
+            );
+            return;
+          }
           window.google.accounts.id.initialize({
             client_id: process.env.REACT_APP_GOOGLE_CLIENT_ID,
             callback: stableCallback,

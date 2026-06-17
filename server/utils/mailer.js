@@ -5,8 +5,13 @@ const createTransporter = () => {
   const pass = process.env.EMAIL_PASS;
 
   if (!user || !pass) {
-    throw new Error("SMTP Credentials (EMAIL_USER or EMAIL_PASS) are missing from environment variables.");
+    throw new Error("SMTP credentials missing: EMAIL_USER or EMAIL_PASS not set in environment variables.");
   }
+
+  // Strip any spaces from the app password (common copy-paste issue from Google)
+  const cleanPass = pass.replace(/\s+/g, "");
+
+  console.log(`[mailer] Creating transporter for ${user} (pass length: ${cleanPass.length})`);
 
   return nodemailer.createTransport({
     host: "smtp.gmail.com",
@@ -14,11 +19,15 @@ const createTransporter = () => {
     secure: true,
     auth: {
       user: user,
-      pass: pass.replace(/\s+/g, ""),
+      pass: cleanPass,
     },
     tls: {
       rejectUnauthorized: false
-    }
+    },
+    // Timeouts to prevent hanging connections on Render
+    connectionTimeout: 10000,  // 10s to establish TCP connection
+    greetingTimeout: 10000,    // 10s for SMTP greeting
+    socketTimeout: 15000,      // 15s for socket inactivity
   });
 };
 
@@ -27,16 +36,26 @@ const createTransporter = () => {
 // ─────────────────────────────────────────
 const testConnection = async () => {
   try {
+    console.log("[mailer] Testing SMTP connection to smtp.gmail.com:465...");
+    console.log(`[mailer]   EMAIL_USER = ${process.env.EMAIL_USER || "NOT SET"}`);
+    console.log(`[mailer]   EMAIL_PASS = ${process.env.EMAIL_PASS ? `SET (${process.env.EMAIL_PASS.replace(/\s+/g, "").length} chars)` : "NOT SET"}`);
     const transporter = createTransporter();
     await transporter.verify();
-    console.log("[mailer] ✅ SMTP connection verified successfully");
+    console.log("[mailer] ✅ SMTP connection verified successfully — emails WILL be delivered");
   } catch (err) {
     console.error("[mailer] ❌ SMTP connection FAILED:", err.message);
+    console.error("[mailer] ❌ Full error:", err);
     if (err.code === "EAUTH") {
       console.error(
         "[mailer] ⚠️  Gmail auth failed. Check EMAIL_USER and EMAIL_PASS in Render env vars.\n" +
         "          EMAIL_PASS must be a 16-char App Password (no spaces), NOT your Gmail password.\n" +
         "          Generate at: Google Account → Security → 2-Step Verification → App passwords"
+      );
+    }
+    if (err.code === "ESOCKET" || err.code === "ETIMEDOUT" || err.code === "ECONNREFUSED") {
+      console.error(
+        "[mailer] ⚠️  Network issue connecting to smtp.gmail.com:465.\n" +
+        "          This can happen on Render's free tier. The email worker will keep retrying."
       );
     }
   }

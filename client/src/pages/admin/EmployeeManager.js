@@ -122,7 +122,7 @@ const EmployeeManager = () => {
   const totalPending  = employees.reduce((s,e) => s+(e.salaryPayments||[]).filter(p=>!p.paid).reduce((a,p)=>a+p.amount,0), 0);
 
   return (
-    <div style={{ padding:32, maxWidth:1200, fontFamily:'Cairo, sans-serif' }}>
+    <div className="emp-container">
       <Toast msg={toast.msg} type={toast.type} />
 
       {/* Header */}
@@ -144,7 +144,7 @@ const EmployeeManager = () => {
 
       {/* Summary Cards */}
       {user?.role === 'admin' && (
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:16, marginBottom:24 }}>
+        <div className="summary-grid">
           {[
             { label:'Total Employees', value:employees.length,                                   color:'#2D5A27', icon:'👥' },
             { label:'Monthly Payroll',  value:`PKR ${totalSalary.toLocaleString()}`,            color:'#5D4037', icon:'💰' },
@@ -162,7 +162,7 @@ const EmployeeManager = () => {
         </div>
       )}
 
-      <div style={{ display:'grid', gridTemplateColumns: selected ? '1fr 1.4fr' : '1fr', gap:20 }}>
+      <div className={`main-grid ${selected ? 'split' : ''}`}>
 
         {/* Employee List */}
         <div>
@@ -249,13 +249,13 @@ const EmployeeManager = () => {
             </div>
 
             {/* Salary summary */}
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:0, borderBottom:'1px solid #f0f0f0' }}>
+            <div className="salary-stats">
               {[
                 ['Total Paid', (selected.salaryPayments||[]).filter(p=>p.paid).reduce((s,p)=>s+p.amount,0), '#27ae60'],
                 ['Pending',   (selected.salaryPayments||[]).filter(p=>!p.paid).reduce((s,p)=>s+p.amount,0), '#e74c3c'],
                 ['Records',   (selected.salaryPayments||[]).length, '#2D5A27'],
               ].map(([l,v,c]) => (
-                <div key={l} style={{ padding:'14px', textAlign:'center', borderRight:'1px solid #f0f0f0' }}>
+                <div key={l} className="salary-stat-item">
                   <div style={{ fontSize:'0.72rem', color:'#888', textTransform:'uppercase', marginBottom:4 }}>{l}</div>
                   <div style={{ fontWeight:800, color:c, fontSize:'1rem', fontFamily:'Playfair Display' }}>{typeof v==='number' && l!=='Records' ? `PKR ${v.toLocaleString()}` : v}</div>
                 </div>
@@ -304,7 +304,7 @@ const EmployeeManager = () => {
             <div style={{ fontSize:48, marginBottom:16 }}>🗑️</div>
             <h3 style={{ fontFamily:'Playfair Display', marginBottom:10 }}>Remove Employee?</h3>
             <p style={{ color:'#888', marginBottom:24, fontSize:'0.9rem' }}>All salary records will be kept.</p>
-            <div style={{ display:'flex', gap:12 }}>
+            <div className="form-buttons">
               <button onClick={()=>del(delId)} style={{ flex:1, background:'#e74c3c', color:'white', border:'none', borderRadius:10, padding:12, fontWeight:700, cursor:'pointer', fontFamily:'Cairo, sans-serif' }}>Remove</button>
               <button onClick={()=>setDelId(null)} style={{ flex:1, background:'#f5f5f5', color:'#555', border:'none', borderRadius:10, padding:12, fontWeight:700, cursor:'pointer', fontFamily:'Cairo, sans-serif' }}>Cancel</button>
             </div>
@@ -328,7 +328,7 @@ const EmployeeManager = () => {
                   <input type={t} value={form[k]} onChange={e=>setForm(f=>({...f,[k]:e.target.value}))} style={inp} onFocus={onF} onBlur={onB} />
                 </div>
               ))}
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+              <div className="form-row-2col">
                 <div>
                   <label style={{ display:'block', marginBottom:5, fontWeight:700, fontSize:'0.82rem', color:'#444' }}>Base Salary (PKR)</label>
                   <input type="number" value={form.baseSalary} onChange={e=>setForm(f=>({...f,baseSalary:e.target.value}))} placeholder="0" min="0" style={inp} onFocus={onF} onBlur={onB} />
@@ -345,7 +345,7 @@ const EmployeeManager = () => {
                 <label style={{ display:'block', marginBottom:5, fontWeight:700, fontSize:'0.82rem', color:'#444' }}>Notes</label>
                 <textarea value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} rows={2} style={{ ...inp, resize:'vertical' }} onFocus={onF} onBlur={onB} />
               </div>
-              <div style={{ display:'flex', gap:12, marginTop:6 }}>
+              <div className="form-buttons">
                 <button onClick={save} style={{ flex:1, background:'#2D5A27', color:'white', border:'none', borderRadius:10, padding:13, fontWeight:700, cursor:'pointer', fontFamily:'Cairo, sans-serif' }}
                   onMouseEnter={e=>e.currentTarget.style.background='#3a7a31'} onMouseLeave={e=>e.currentTarget.style.background='#2D5A27'}>
                   {editing?'💾 Save Changes':'👤 Add Employee'}
@@ -384,7 +384,7 @@ const EmployeeManager = () => {
                 <input type="checkbox" checked={salForm.paid} onChange={e=>setSalForm(f=>({...f,paid:e.target.checked}))} style={{ width:16, height:16, accentColor:'#2D5A27' }} />
                 Mark as Paid immediately
               </label>
-              <div style={{ display:'flex', gap:12, marginTop:4 }}>
+              <div className="form-buttons">
                 <button onClick={addSalary} style={{ flex:1, background:'#2D5A27', color:'white', border:'none', borderRadius:10, padding:13, fontWeight:700, cursor:'pointer', fontFamily:'Cairo, sans-serif' }}
                   onMouseEnter={e=>e.currentTarget.style.background='#3a7a31'} onMouseLeave={e=>e.currentTarget.style.background='#2D5A27'}>
                   💳 Add Record
@@ -395,7 +395,95 @@ const EmployeeManager = () => {
           </div>
         </div>
       )}
-      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+        
+        .emp-container {
+          padding: 32px;
+          max-width: 1200px;
+          margin: 0 auto;
+          font-family: 'Cairo', sans-serif;
+          box-sizing: border-box;
+        }
+        
+        .summary-grid {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: 16px;
+          margin-bottom: 24px;
+        }
+        
+        .main-grid {
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 20px;
+        }
+        
+        .form-row-2col {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 12px;
+        }
+
+        .salary-stats {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 0;
+          border-bottom: 1px solid #f0f0f0;
+        }
+
+        .salary-stat-item {
+          padding: 14px;
+          text-align: center;
+          border-right: 1px solid #f0f0f0;
+        }
+        
+        @media (min-width: 901px) {
+          .main-grid.split {
+            grid-template-columns: 1fr 1.4fr;
+          }
+        }
+        
+        @media (max-width: 1024px) {
+          .summary-grid {
+            grid-template-columns: repeat(2, 1fr);
+          }
+        }
+        
+        @media (max-width: 768px) {
+          .emp-container {
+            padding: 16px;
+          }
+        }
+        
+        @media (max-width: 480px) {
+          .summary-grid {
+            grid-template-columns: 1fr;
+          }
+          .form-row-2col {
+            grid-template-columns: 1fr;
+          }
+          .salary-stats {
+            grid-template-columns: 1fr;
+          }
+          .salary-stat-item {
+            border-right: none;
+            border-bottom: 1px solid #f0f0f0;
+          }
+          .salary-stat-item:last-child {
+            border-bottom: none;
+          }
+          .form-buttons {
+            display: flex;
+            flex-direction: column-reverse;
+            gap: 12px;
+            margin-top: 6px;
+          }
+          .form-buttons button {
+            width: 100%;
+          }
+        }
+      `}</style>
     </div>
   );
 };
