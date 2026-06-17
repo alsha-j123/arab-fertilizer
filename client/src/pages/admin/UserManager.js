@@ -91,8 +91,10 @@ const UserManager = () => {
   };
 
   const filtered = useMemo(() => users.filter(u => {
-    const matchesSearch = u.name.toLowerCase().includes(search.toLowerCase()) || 
-                          u.email.toLowerCase().includes(search.toLowerCase()) ||
+    const name = u.name || '';
+    const email = u.email || '';
+    const matchesSearch = name.toLowerCase().includes(search.toLowerCase()) || 
+                          email.toLowerCase().includes(search.toLowerCase()) ||
                           (u.phone || '').includes(search);
     const matchesRole = filterRole === 'all' || u.role === filterRole;
     return matchesSearch && matchesRole;
@@ -216,7 +218,9 @@ const UserManager = () => {
                       ) : '—'}
                     </td>
                     <td style={{ padding: '12px 14px', fontSize: '0.82rem', color: '#888' }}>
-                      {new Date(u.createdAt).toLocaleDateString('en-PK', { day: '2-digit', month: 'short', year: 'numeric' })}
+                      {u.createdAt && !isNaN(new Date(u.createdAt).getTime())
+                        ? new Date(u.createdAt).toLocaleDateString('en-PK', { day: '2-digit', month: 'short', year: 'numeric' })
+                        : '—'}
                     </td>
                     <td style={{ padding: '12px 14px' }}>
                       {u.role === 'customer' && (

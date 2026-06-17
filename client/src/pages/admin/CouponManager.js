@@ -22,7 +22,7 @@ const CouponManager = () => {
 
   const flash = msg => { setToast(msg); setTimeout(()=>setToast(''), 2500); };
   const openAdd  = () => { setEditing(null); setForm(EMPTY); setModal(true); };
-  const openEdit = c  => { setEditing(c); setForm({ code:c.code, type:c.type, value:String(c.value), minOrder:String(c.minOrder||''), maxUses:String(c.maxUses||'100'), expiresAt: c.expiresAt?new Date(c.expiresAt).toISOString().split('T')[0]:'', isActive:c.isActive }); setModal(true); };
+  const openEdit = c  => { setEditing(c); setForm({ code:c.code, type:c.type, value:String(c.value), minOrder:String(c.minOrder||''), maxUses:String(c.maxUses||'100'), expiresAt: c.expiresAt && !isNaN(new Date(c.expiresAt).getTime()) ? new Date(c.expiresAt).toISOString().split('T')[0] : '', isActive:c.isActive }); setModal(true); };
 
   const save = async () => {
     if (!form.code.trim() || !form.value) { alert('Code and value required'); return; }
@@ -91,7 +91,7 @@ const CouponManager = () => {
                   <td style={{ padding:'12px 14px', fontWeight:700, color:'#e74c3c' }}>
                     {c.type==='percent' ? `${c.value}% OFF` : `PKR ${c.value} OFF`}
                   </td>
-                  <td style={{ padding:'12px 14px', fontSize:'0.85rem', color:'#666' }}>{c.minOrder>0?`PKR ${c.minOrder.toLocaleString()}`:'None'}</td>
+                  <td style={{ padding:'12px 14px', fontSize:'0.85rem', color:'#666' }}>{Number(c.minOrder||0)>0?`PKR ${Number(c.minOrder).toLocaleString()}`:'None'}</td>
                   <td style={{ padding:'12px 14px', fontSize:'0.85rem', color:'#666' }}>{c.usedCount}/{c.maxUses}</td>
                   <td style={{ padding:'12px 14px', fontSize:'0.82rem', color:'#888' }}>{c.expiresAt?new Date(c.expiresAt).toLocaleDateString('en-PK'):'Never'}</td>
                   <td style={{ padding:'12px 14px' }}>

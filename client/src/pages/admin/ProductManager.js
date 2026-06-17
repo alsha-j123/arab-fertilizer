@@ -381,10 +381,11 @@ const ProductManager = () => {
 
   const flash = msg => { setToast(msg); setTimeout(() => setToast(''), 2500); };
 
-  const filtered = products.filter(p =>
-    p.name.toLowerCase().includes(search.toLowerCase()) &&
-    (catFilter === 'all' || p.category === catFilter)
-  );
+  const filtered = products.filter(p => {
+    const name = p.name || '';
+    return name.toLowerCase().includes(search.toLowerCase()) &&
+           (catFilter === 'all' || p.category === catFilter);
+  });
 
   const handleSave = async (form, imagePreviews) => {
     const imgs = Array.isArray(imagePreviews) ? imagePreviews : (imagePreviews ? [imagePreviews] : []);
@@ -525,8 +526,8 @@ const ProductManager = () => {
                       <span style={{ background:'#e8f5e3', color:'#2D5A27', borderRadius:12, padding:'3px 10px', fontSize:'0.72rem', fontWeight:700, textTransform:'capitalize' }}>{p.category}</span>
                     </td>
                     <td style={{ padding:'10px 14px', fontSize:'0.88rem' }}>
-                      <div style={{ fontWeight:700, color:'#2D5A27' }}>PKR {(p.discountPrice||p.price).toLocaleString()}</div>
-                      {p.discountPrice && <div style={{ fontSize:'0.74rem', color:'#aaa', textDecoration:'line-through' }}>PKR {p.price.toLocaleString()}</div>}
+                      <div style={{ fontWeight:700, color:'#2D5A27' }}>PKR {Number(p.discountPrice||p.price||0).toLocaleString()}</div>
+                      {p.discountPrice && <div style={{ fontSize:'0.74rem', color:'#aaa', textDecoration:'line-through' }}>PKR {Number(p.price||0).toLocaleString()}</div>}
                     </td>
                     <td style={{ padding:'10px 14px' }}>
                       <div style={{ display:'flex', alignItems:'center', gap:5 }}>

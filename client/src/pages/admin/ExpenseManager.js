@@ -70,13 +70,12 @@ const ExpenseManager = () => {
 
   const flash = msg => { setToast(msg); setTimeout(() => setToast(''), 2500); };
 
-  /* ── Computed stats ── */
   const stats = useMemo(() => {
-    const total = expenses.reduce((s, e) => s + e.amount, 0);
+    const total = expenses.reduce((s, e) => s + Number(e.amount || 0), 0);
     const byCategory = {};
     expenses.forEach(e => { 
       const catName = e.category?.name || 'Uncategorized';
-      byCategory[catName] = (byCategory[catName] || 0) + e.amount; 
+      byCategory[catName] = (byCategory[catName] || 0) + Number(e.amount || 0); 
     });
     return { total, byCategory, count: expenses.length };
   }, [expenses]);
@@ -110,11 +109,14 @@ const ExpenseManager = () => {
 
   const openEdit = exp => {
     setEditing(exp);
+    const validDate = exp.date && !isNaN(new Date(exp.date).getTime())
+      ? new Date(exp.date).toISOString().split('T')[0]
+      : new Date().toISOString().split('T')[0];
     setForm({
-      title: exp.title,
-      amount: String(exp.amount),
+      title: exp.title || '',
+      amount: String(exp.amount || ''),
       category: exp.category?._id || '',
-      date: new Date(exp.date).toISOString().split('T')[0],
+      date: validDate,
       notes: exp.notes || '',
       employee: exp.employee?._id || exp.employee || '',
     });
@@ -254,7 +256,9 @@ const ExpenseManager = () => {
                 {expenses.map(exp => (
                   <tr key={exp._id} style={{ borderBottom: '1px solid #f8f8f8' }}>
                     <td style={{ padding: '16px 20px', fontSize: '0.88rem', color: '#666' }}>
-                      {new Date(exp.date).toLocaleDateString('en-PK', { day: '2-digit', month: 'short' })}
+                      {exp.date && !isNaN(new Date(exp.date).getTime())
+                        ? new Date(exp.date).toLocaleDateString('en-PK', { day: '2-digit', month: 'short' })
+                        : '—'}
                     </td>
                     <td style={{ padding: '16px 20px' }}>
                       <div style={{ fontWeight: 700, fontSize: '0.92rem', color: '#1a1a1a' }}>{exp.title}</div>
@@ -273,7 +277,7 @@ const ExpenseManager = () => {
                       </span>
                     </td>
                     <td style={{ padding: '16px 20px', textAlign: 'right', fontWeight: 800, color: '#e74c3c', fontSize: '0.95rem' }}>
-                      PKR {exp.amount.toLocaleString()}
+                      PKR {Number(exp.amount || 0).toLocaleString()}
                     </td>
                     {user?.role === 'admin' && (
                       <td style={{ padding: '16px 20px' }}>
@@ -295,7 +299,7 @@ const ExpenseManager = () => {
           <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#888', marginRight: 4 }}>BREAKDOWN BY CATEGORY:</span>
           {Object.entries(stats.byCategory).map(([name, total]) => (
             <div key={name} style={{ background: 'white', border: '1px solid #eee', padding: '5px 12px', borderRadius: 8, fontSize: '0.78rem', fontWeight: 700 }}>
-              {name}: <span style={{ color: '#e74c3c' }}>PKR {total.toLocaleString()}</span>
+              {name}: <span style={{ color: '#e74c3c' }}>PKR {Number(total || 0).toLocaleString()}</span>
             </div>
           ))}
         </div>

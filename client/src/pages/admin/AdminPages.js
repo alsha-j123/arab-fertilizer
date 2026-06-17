@@ -356,10 +356,11 @@ export const StockInventory = () => {
 
   const categories = ['all','insecticides','weedicides','fungicides','pgr','granules'];
 
-  const filtered = React.useMemo(() => products.filter(p =>
-    p.name.toLowerCase().includes(search.toLowerCase()) &&
-    (catFilter === 'all' || p.category === catFilter)
-  ), [products, search, catFilter]);
+  const filtered = React.useMemo(() => products.filter(p => {
+    const name = p.name || '';
+    return name.toLowerCase().includes(search.toLowerCase()) &&
+           (catFilter === 'all' || p.category === catFilter);
+  }), [products, search, catFilter]);
 
   const { lowStock, outStock, wellStock } = React.useMemo(() => {
     let low = 0, out = 0, well = 0;
@@ -553,11 +554,12 @@ export const VendorModule = () => {
 
   const flash = msg => { setToast(msg); setTimeout(() => setToast(''), 2500); };
 
-  const filtered = React.useMemo(() => vendors.filter(v =>
-    v.name.toLowerCase().includes(search.toLowerCase()) ||
-    (v.contact?.email||'').toLowerCase().includes(search.toLowerCase()) ||
-    (v.contact?.address||'').toLowerCase().includes(search.toLowerCase())
-  ), [vendors, search]);
+  const filtered = React.useMemo(() => vendors.filter(v => {
+    const name = v.name || '';
+    return name.toLowerCase().includes(search.toLowerCase()) ||
+           (v.contact?.email||'').toLowerCase().includes(search.toLowerCase()) ||
+           (v.contact?.address||'').toLowerCase().includes(search.toLowerCase());
+  }), [vendors, search]);
 
   const openAdd  = () => { setEditing(null); setForm(EMPTY_VENDOR); setModal(true); };
   const openEdit = v  => {
@@ -780,8 +782,8 @@ export const Ledger = () => {
   const { totalRevenue, totalPending, codOrders } = React.useMemo(() => {
     let rev = 0, pend = 0, cod = 0;
     for (const o of filtered) {
-      if (o.deliveryStatus === 'delivered') rev += o.totalAmount;
-      if (o.paymentStatus === 'pending') pend += o.totalAmount;
+      if (o.deliveryStatus === 'delivered') rev += Number(o.totalAmount || 0);
+      if (o.paymentStatus === 'pending') pend += Number(o.totalAmount || 0);
       if (o.paymentMethod === 'cod') cod++;
     }
     return { totalRevenue: rev, totalPending: pend, codOrders: cod };
@@ -824,8 +826,8 @@ export const Ledger = () => {
       {/* Summary */}
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(200px, 1fr))', gap:16, marginBottom:28 }}>
         {[
-          { label:'Total Revenue',   value:`PKR ${totalRevenue.toLocaleString()}`,  color:'#27ae60', icon:'📈' },
-          { label:'Pending Payment', value:`PKR ${totalPending.toLocaleString()}`,  color:'#f39c12', icon:'⏳' },
+          { label:'Total Revenue',   value:`PKR ${Number(totalRevenue || 0).toLocaleString()}`,  color:'#27ae60', icon:'📈' },
+          { label:'Pending Payment', value:`PKR ${Number(totalPending || 0).toLocaleString()}`,  color:'#f39c12', icon:'⏳' },
           { label:'COD Orders',      value:codOrders,                               color:'#5D4037', icon:'💵' },
         ].map(card => (
           <div key={card.label} style={{ background:'white', borderRadius:12, padding:'20px 22px', boxShadow:'0 2px 12px rgba(0,0,0,0.07)', borderLeft:`4px solid ${card.color}` }}>

@@ -42,11 +42,12 @@ const DealerManager = () => {
 
   const flash = (msg, type = 'success') => { setToast({ msg, type }); setTimeout(() => setToast({ msg: '', type: 'success' }), 2500); };
 
-  const filtered = dealers.filter(d =>
-    d.name.toLowerCase().includes(search.toLowerCase()) ||
-    (d.city || '').toLowerCase().includes(search.toLowerCase()) ||
-    (d.area || '').toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = dealers.filter(d => {
+    const name = d.name || '';
+    return name.toLowerCase().includes(search.toLowerCase()) ||
+           (d.city || '').toLowerCase().includes(search.toLowerCase()) ||
+           (d.area || '').toLowerCase().includes(search.toLowerCase());
+  });
 
   const openAdd = () => {
     setEditing(null);

@@ -52,7 +52,7 @@ const CategoryPage = ({ category, title, description, icon }) => {
 
   const filtered = useMemo(() => {
     let result = [...products];
-    if (search) result = result.filter(p => p.name.toLowerCase().includes(search.toLowerCase()));
+    if (search) result = result.filter(p => (p.name || '').toLowerCase().includes(search.toLowerCase()));
     if (sort === 'price-asc')  result.sort((a, b) => (a.discountPrice||a.price) - (b.discountPrice||b.price));
     if (sort === 'price-desc') result.sort((a, b) => (b.discountPrice||b.price) - (a.discountPrice||a.price));
     if (sort === 'rating')     result.sort((a, b) => b.avgRating - a.avgRating);

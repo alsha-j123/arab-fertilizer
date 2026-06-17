@@ -38,10 +38,12 @@ const EmployeeManager = () => {
 
   const flash = (msg, type='success') => { setToast({ msg, type }); setTimeout(() => setToast({ msg:'', type:'success' }), 2500); };
 
-  const filtered = employees.filter(e =>
-    e.name.toLowerCase().includes(search.toLowerCase()) ||
-    e.role.toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = employees.filter(e => {
+    const name = e.name || '';
+    const role = e.role || '';
+    return name.toLowerCase().includes(search.toLowerCase()) ||
+           role.toLowerCase().includes(search.toLowerCase());
+  });
 
   const openAdd  = () => {
     if (user?.role !== 'admin') return;
@@ -117,9 +119,9 @@ const EmployeeManager = () => {
   const onF = e => e.target.style.borderColor='#2D5A27';
   const onB = e => e.target.style.borderColor='#e0e0e0';
 
-  const totalSalary   = employees.reduce((s,e) => s+e.baseSalary,0);
-  const totalPaid     = employees.reduce((s,e) => s+(e.salaryPayments||[]).filter(p=>p.paid).reduce((a,p)=>a+p.amount,0), 0);
-  const totalPending  = employees.reduce((s,e) => s+(e.salaryPayments||[]).filter(p=>!p.paid).reduce((a,p)=>a+p.amount,0), 0);
+  const totalSalary   = employees.reduce((s,e) => s+Number(e.baseSalary || 0),0);
+  const totalPaid     = employees.reduce((s,e) => s+(e.salaryPayments||[]).filter(p=>p.paid).reduce((a,p)=>a+Number(p.amount || 0),0), 0);
+  const totalPending  = employees.reduce((s,e) => s+(e.salaryPayments||[]).filter(p=>!p.paid).reduce((a,p)=>a+Number(p.amount || 0),0), 0);
 
   return (
     <div className="emp-container">
@@ -193,12 +195,12 @@ const EmployeeManager = () => {
                     <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
                       <div style={{ display:'flex', gap:12, alignItems:'center' }}>
                         <div style={{ width:44, height:44, borderRadius:'50%', background:'linear-gradient(135deg,#2D5A27,#4a8a42)', display:'flex', alignItems:'center', justifyContent:'center', color:'white', fontWeight:800, fontSize:'1.1rem', flexShrink:0 }}>
-                          {emp.name[0].toUpperCase()}
+                          {emp.name?.[0]?.toUpperCase() || '?'}
                         </div>
                         <div>
                           <div style={{ fontWeight:700, fontSize:'0.95rem', color:'#1a1a1a' }}>{emp.name}</div>
                           <div style={{ fontSize:'0.78rem', color:'#888' }}>{emp.role}</div>
-                          <div style={{ fontSize:'0.75rem', color:'#2D5A27', fontWeight:700, marginTop:2 }}>PKR {emp.baseSalary.toLocaleString()}/month</div>
+                          <div style={{ fontSize:'0.75rem', color:'#2D5A27', fontWeight:700, marginTop:2 }}>PKR {Number(emp.baseSalary || 0).toLocaleString()}/month</div>
                         </div>
                       </div>
                       <div style={{ display:'flex', flex:'column', alignItems:'flex-end', gap:6 }}>
@@ -229,7 +231,7 @@ const EmployeeManager = () => {
             <div style={{ background:'linear-gradient(135deg,#1a2e18,#2D5A27)', padding:'20px 24px', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
               <div>
                 <div style={{ color:'#C8A951', fontFamily:'Playfair Display', fontSize:'1.1rem', fontWeight:700 }}>{selected.name}</div>
-                <div style={{ color:'rgba(255,255,255,0.6)', fontSize:'0.82rem' }}>{selected.role} · PKR {selected.baseSalary.toLocaleString()}/month</div>
+                <div style={{ color:'rgba(255,255,255,0.6)', fontSize:'0.82rem' }}>{selected.role} · PKR {Number(selected.baseSalary || 0).toLocaleString()}/month</div>
               </div>
               {user?.role === 'admin' && (
                 <button onClick={()=>setSalModal(true)}

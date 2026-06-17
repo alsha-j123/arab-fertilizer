@@ -99,7 +99,9 @@ const SalaryManager = () => {
     records.sort((a, b) => (b.month || '').localeCompare(a.month || ''));
     
     return records.filter(r => {
-      const matchSearch = r.empName.toLowerCase().includes(search.toLowerCase()) || r.empRole.toLowerCase().includes(search.toLowerCase());
+      const empName = r.empName || '';
+      const empRole = r.empRole || '';
+      const matchSearch = empName.toLowerCase().includes(search.toLowerCase()) || empRole.toLowerCase().includes(search.toLowerCase());
       const matchMonth = filterMonth ? r.month === filterMonth : true;
       return matchSearch && matchMonth;
     });
@@ -142,11 +144,11 @@ const SalaryManager = () => {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14, marginBottom: 24 }}>
         <div style={{ background: 'linear-gradient(135deg,#2D5A27,#3a7a31)', borderRadius: 14, padding: '18px 20px', color: 'white' }}>
           <div style={{ fontSize: '0.78rem', opacity: 0.7, marginBottom: 4 }}>Total Paid</div>
-          <div style={{ fontSize: '1.5rem', fontWeight: 800, fontFamily: 'Playfair Display' }}>PKR {stats.totalPaid.toLocaleString()}</div>
+          <div style={{ fontSize: '1.5rem', fontWeight: 800, fontFamily: 'Playfair Display' }}>PKR {Number(stats.totalPaid || 0).toLocaleString()}</div>
         </div>
         <div style={{ background: 'white', borderRadius: 14, padding: '18px 20px', boxShadow: '0 2px 12px rgba(0,0,0,0.06)' }}>
           <div style={{ fontSize: '0.78rem', color: '#888', marginBottom: 4 }}>Pending Disbursement</div>
-          <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#e74c3c', fontFamily: 'Playfair Display' }}>PKR {stats.totalPending.toLocaleString()}</div>
+          <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#e74c3c', fontFamily: 'Playfair Display' }}>PKR {Number(stats.totalPending || 0).toLocaleString()}</div>
         </div>
         <div style={{ background: 'white', borderRadius: 14, padding: '18px 20px', boxShadow: '0 2px 12px rgba(0,0,0,0.06)' }}>
           <div style={{ fontSize: '0.78rem', color: '#888', marginBottom: 4 }}>Records</div>
@@ -197,7 +199,7 @@ const SalaryManager = () => {
                     <td style={{ padding: '14px', fontWeight: 700, fontSize: '0.9rem', color: '#333' }}>{r.month}</td>
                     <td style={{ padding: '14px', fontWeight: 600, color: '#1a1a1a', fontSize: '0.9rem' }}>{r.empName}</td>
                     <td style={{ padding: '14px', fontSize: '0.82rem', color: '#888' }}>{r.empRole}</td>
-                    <td style={{ padding: '14px', fontWeight: 800, color: '#2D5A27', fontSize: '0.95rem' }}>PKR {r.amount?.toLocaleString()}</td>
+                    <td style={{ padding: '14px', fontWeight: 800, color: '#2D5A27', fontSize: '0.95rem' }}>PKR {Number(r.amount || 0).toLocaleString()}</td>
                     <td style={{ padding: '14px' }}>
                       <button onClick={() => togglePaid(r.empId, r._id, r.paid)}
                         disabled={user?.role !== 'admin'}

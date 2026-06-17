@@ -56,7 +56,9 @@ const FuelManager = () => {
       employee: rec.employee?._id || rec.employee,
       vehicleInfo: rec.vehicleInfo, fuelType: rec.fuelType,
       liters: String(rec.liters), costPerLiter: String(rec.costPerLiter),
-      date: new Date(rec.date).toISOString().split('T')[0],
+      date: rec.date && !isNaN(new Date(rec.date).getTime())
+        ? new Date(rec.date).toISOString().split('T')[0]
+        : new Date().toISOString().split('T')[0],
       odometerKm: rec.odometerKm ? String(rec.odometerKm) : '', notes: rec.notes || '',
     });
     setModal(true);
@@ -100,7 +102,7 @@ const FuelManager = () => {
           <h1 style={{ fontFamily:'Playfair Display', fontSize:'clamp(1.4rem,3vw,1.9rem)', marginBottom:4 }}>
             {user?.role === 'employee' ? 'My Fuel Consumption' : 'Fuel Consumption'}
           </h1>
-          <p style={{ color:'#888', fontSize:'0.88rem' }}>{stats.count} records — {stats.totalLiters.toFixed(1)} L — PKR {stats.totalCost.toLocaleString()}</p>
+          <p style={{ color:'#888', fontSize:'0.88rem' }}>{stats.count} records — {Number(stats.totalLiters || 0).toFixed(1)} L — PKR {Number(stats.totalCost || 0).toLocaleString()}</p>
         </div>
         {(user?.role === 'admin' || user?.role === 'employee') && (
           <button onClick={openAdd} style={{ background:'#2D5A27', color:'white', border:'none', borderRadius:10, padding:'11px 22px', fontWeight:700, cursor:'pointer', fontFamily:'Cairo, sans-serif' }}
@@ -114,11 +116,11 @@ const FuelManager = () => {
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(180px,1fr))', gap:14, marginBottom:24 }}>
         <div style={{ background:'linear-gradient(135deg,#e67e22,#d35400)', borderRadius:14, padding:'18px 20px', color:'white' }}>
           <div style={{ fontSize:'0.78rem', opacity:0.7, marginBottom:4 }}>Total Cost</div>
-          <div style={{ fontSize:'1.5rem', fontWeight:800, fontFamily:'Playfair Display' }}>PKR {stats.totalCost.toLocaleString()}</div>
+          <div style={{ fontSize:'1.5rem', fontWeight:800, fontFamily:'Playfair Display' }}>PKR {Number(stats.totalCost || 0).toLocaleString()}</div>
         </div>
         <div style={{ background:'white', borderRadius:14, padding:'18px 20px', boxShadow:'0 2px 12px rgba(0,0,0,0.06)' }}>
           <div style={{ fontSize:'0.78rem', color:'#888', marginBottom:4 }}>Total Liters</div>
-          <div style={{ fontSize:'1.5rem', fontWeight:800, color:'#e67e22', fontFamily:'Playfair Display' }}>{stats.totalLiters.toFixed(1)} L</div>
+          <div style={{ fontSize:'1.5rem', fontWeight:800, color:'#e67e22', fontFamily:'Playfair Display' }}>{Number(stats.totalLiters || 0).toFixed(1)} L</div>
         </div>
         <div style={{ background:'white', borderRadius:14, padding:'18px 20px', boxShadow:'0 2px 12px rgba(0,0,0,0.06)' }}>
           <div style={{ fontSize:'0.78rem', color:'#888', marginBottom:4 }}>Records</div>
@@ -175,7 +177,7 @@ const FuelManager = () => {
                     </td>
                     <td style={{ padding:'12px 14px', fontWeight:700, fontSize:'0.88rem' }}>{r.liters} L</td>
                     <td style={{ padding:'12px 14px', fontSize:'0.85rem', color:'#888' }}>PKR {r.costPerLiter}</td>
-                    <td style={{ padding:'12px 14px', fontWeight:800, color:'#e74c3c', fontSize:'0.92rem' }}>PKR {r.totalCost?.toLocaleString()}</td>
+                    <td style={{ padding:'12px 14px', fontWeight:800, color:'#e74c3c', fontSize:'0.92rem' }}>PKR {Number(r.totalCost || 0).toLocaleString()}</td>
                     {(user?.role === 'admin' || (user?.role === 'employee' && (r.employee?._id || r.employee) === user?.employeeId)) && (
                       <td style={{ padding:'12px 14px' }}>
                         <div style={{ display:'flex', gap:7 }}>
